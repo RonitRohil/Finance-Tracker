@@ -30,10 +30,10 @@ type StockAliasGroup = {
 
 function compactINR(amount: number) {
   const abs = Math.abs(amount);
-  if (abs >= 1e7) return `Rs${(abs / 1e7).toFixed(abs >= 1e8 ? 1 : 2)} Cr`;
-  if (abs >= 1e5) return `Rs${(abs / 1e5).toFixed(abs >= 1e6 ? 1 : 2)} L`;
-  if (abs >= 1e3) return `Rs${(abs / 1e3).toFixed(1)}k`;
-  return `Rs${abs.toFixed(0)}`;
+  return `Rs${new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs)}`;
 }
 
 export default function StockMappings({

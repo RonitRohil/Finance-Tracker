@@ -1,8 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import Icon from "../components/Icon";
 import { PortfolioData } from "../types";
 import {
   calculateFDValue,
+  calculateRDInvested,
   calculateRDValue,
   filterByMonth,
   getAllAccounts,
@@ -13,17 +14,9 @@ import {
   getTodayISO,
 } from "../lib/utils";
 
-function formatINR(amount: number, options?: { compact?: boolean; maximumFractionDigits?: number }) {
+function formatINR(amount: number, options?: { maximumFractionDigits?: number }) {
   const abs = Math.abs(amount);
   const sign = amount < 0 ? "-" : "";
-  const compact = options?.compact;
-
-  if (compact) {
-    if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(abs >= 1e8 ? 1 : 2)} Cr`;
-    if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(abs >= 1e6 ? 1 : 2)} L`;
-    if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)}k`;
-  }
-
   return `${sign}${new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -225,8 +218,8 @@ function Donut({
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <div className="text-[10px] uppercase tracking-wider text-[color:var(--ink-4)]">Spent</div>
-        <div className="font-display text-[22px] font-semibold tabular">{formatINR(total, { compact: true })}</div>
-        <div className="text-[11px] text-[color:var(--ink-3)]">this month</div>
+        <div className="font-display text-[22px] font-semibold tabular">{formatINR(total)}</div>
+        <div className="text-[11px] text-[color:var(--ink-3)]">selected</div>
       </div>
     </div>
   );
@@ -269,6 +262,28 @@ function BankBadge({ name, color, size = 36 }: { name: string; color: string; si
 
 function getDaysInMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseMonthKey(key: string) {
+  const [year, month] = key.split("-").map(Number);
+  return new Date(year, month - 1, 1);
+}
+
+function getStockPortfolioTotals(data: PortfolioData) {
+  return data.investments.stockPortfolios.map((portfolio) => {
+    const totals = portfolio.holdings.reduce(
+      (sum, holding) => ({
+        invested: sum.invested + holding.quantity * holding.avgBuyPrice,
+        current: sum.current + holding.quantity * holding.currentPrice,
+      }),
+      { invested: 0, current: 0 },
+    );
+    return { portfolio, totals };
+  });
 }
 
 function buildLoanUpcoming(data: PortfolioData, today: Date) {
@@ -344,6 +359,7 @@ export default function Dashboard({
   setActiveTab: (tab: string) => void;
 }) {
   const today = useMemo(() => new Date(`${getTodayISO()}T00:00:00`), []);
+  const [selectedSpendMonth, setSelectedSpendMonth] = useState(() => monthKey(new Date(`${getTodayISO()}T00:00:00`)));
   const accounts = useMemo(() => getAllAccounts(data), [data]);
 
   const bankBalance = accounts.reduce((sum, account) => sum + account.balance, 0);
@@ -360,17 +376,36 @@ export default function Dashboard({
     (sum, rd) => sum + calculateRDValue(rd.monthlyDeposit, rd.interestRate, rd.startDate, rd.maturityDate),
     0,
   );
+  const fdInvested = data.investments.fd.reduce((sum, fd) => sum + fd.principal, 0);
+  const rdInvested = data.investments.rd.reduce((sum, rd) => sum + calculateRDInvested(rd.monthlyDeposit, rd.startDate, rd.maturityDate), 0);
   const totalLoans = data.loans.reduce((sum, loan) => sum + loan.outstandingBalance, 0);
   const totalCurrent = mutualFundsCurrent + stocksCurrent + fdCurrent + rdCurrent;
-  const totalInvested = mutualFundsInvested + stocksInvested + data.investments.fd.reduce((sum, fd) => sum + fd.principal, 0);
+  const totalInvested = mutualFundsInvested + stocksInvested + fdInvested + rdInvested;
   const netWorth = bankBalance + totalCurrent - totalLoans;
   const monthIncome = filterByMonth(data.income, today.getFullYear(), today.getMonth()).reduce((sum, item) => sum + item.amount, 0);
-  const monthExpenseEntries = filterByMonth(data.expenses, today.getFullYear(), today.getMonth());
+  const selectedSpendDate = parseMonthKey(selectedSpendMonth);
+  const thisMonthExpenseEntries = filterByMonth(data.expenses, today.getFullYear(), today.getMonth());
+  const monthExpenseEntries = filterByMonth(data.expenses, selectedSpendDate.getFullYear(), selectedSpendDate.getMonth());
   const monthExpense = monthExpenseEntries.reduce((sum, item) => sum + item.amount, 0);
-  const budget = data.settings.monthlyBudget || Math.max(monthExpense * 1.6, 1);
-  const budgetPct = Math.max(0, Math.min(1, monthExpense / budget));
+  const currentMonthExpense = thisMonthExpenseEntries.reduce((sum, item) => sum + item.amount, 0);
+  const budget = data.settings.monthlyBudget || Math.max(currentMonthExpense * 1.6, 1);
+  const budgetPct = Math.max(0, Math.min(1, currentMonthExpense / budget));
   const daysInMonth = getDaysInMonth(today);
   const daysRemaining = Math.max(0, daysInMonth - today.getDate());
+  const investmentSummaries = [
+    { label: "Mutual funds", invested: mutualFundsInvested, current: mutualFundsCurrent },
+    { label: "Stocks", invested: stocksInvested, current: stocksCurrent },
+    { label: "FD", invested: fdInvested, current: fdCurrent },
+    { label: "RD", invested: rdInvested, current: rdCurrent },
+  ];
+  const stockPortfolioSummaries = getStockPortfolioTotals(data);
+  const spendMonthOptions = useMemo(() => {
+    const keys = new Set<string>([monthKey(today)]);
+    data.expenses.forEach((entry) => keys.add(entry.date.slice(0, 7)));
+    return Array.from(keys)
+      .sort((a, b) => b.localeCompare(a))
+      .map((key) => ({ key, label: parseMonthKey(key).toLocaleDateString("en-IN", { month: "long", year: "numeric" }) }));
+  }, [data.expenses, today]);
 
   const expenseBreakdown = useMemo(() => {
     const bucket = new Map<string, number>();
@@ -426,8 +461,8 @@ export default function Dashboard({
     { label: "Loans", color: "var(--neg)", value: Math.abs(totalLoans), display: -totalLoans },
   ];
 
-  const currentMonthLabel = today.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-  const averageDailySpend = monthExpenseEntries.length ? monthExpense / Math.max(1, today.getDate()) : 0;
+  const currentMonthLabel = selectedSpendDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const averageDailySpend = thisMonthExpenseEntries.length ? currentMonthExpense / Math.max(1, today.getDate()) : 0;
 
   return (
     <div className="space-y-4 px-4 pt-4 pb-8 lg:px-0 lg:pt-6">
@@ -458,7 +493,7 @@ export default function Dashboard({
                 </Chip>
                 <span className="text-[11px] text-[color:var(--ink-4)]">•</span>
                 <span className="text-[11.5px] text-[color:var(--ink-3)]">
-                  Assets {formatINR(bankBalance + totalCurrent, { compact: true })} · Liabilities {formatINR(totalLoans, { compact: true })}
+                  Assets {formatINR(bankBalance + totalCurrent)} · Liabilities {formatINR(totalLoans)}
                 </span>
               </div>
             </div>
@@ -479,7 +514,7 @@ export default function Dashboard({
               <div key={item.label} className="flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full" style={{ background: item.color }} />
                 <span className="truncate text-[color:var(--ink-3)]">{item.label}</span>
-                <span className="ml-auto font-mono-num text-[color:var(--ink-2)]">{formatINR(item.display ?? item.value, { compact: true })}</span>
+                <span className="ml-auto font-mono-num text-[color:var(--ink-2)]">{formatINR(item.display ?? item.value)}</span>
               </div>
             ))}
           </div>
@@ -494,7 +529,7 @@ export default function Dashboard({
             </div>
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em]">Income</span>
           </div>
-          <div className="mt-2 font-display text-[22px] font-semibold tabular">{formatINR(monthIncome, { compact: true })}</div>
+          <div className="mt-2 font-display text-[22px] font-semibold tabular">{formatINR(monthIncome)}</div>
           <div className="mt-1 text-[11px] text-[color:var(--ink-4)]">this month</div>
         </Card>
 
@@ -505,9 +540,52 @@ export default function Dashboard({
             </div>
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em]">Spent</span>
           </div>
-          <div className="mt-2 font-display text-[22px] font-semibold tabular">{formatINR(monthExpense, { compact: true })}</div>
-          <div className="mt-1 text-[11px] text-[color:var(--ink-4)]">of {formatINR(budget, { compact: true })} budget</div>
+          <div className="mt-2 font-display text-[22px] font-semibold tabular">{formatINR(currentMonthExpense)}</div>
+          <div className="mt-1 text-[11px] text-[color:var(--ink-4)]">of {formatINR(budget)} budget</div>
         </Card>
+      </div>
+
+      <div>
+        <SectionHead
+          title="Investments"
+          action={
+            <button onClick={() => setActiveTab("investments")} className="text-[11.5px] font-semibold text-[color:var(--accent)]">
+              See all
+            </button>
+          }
+        />
+        <div className="grid grid-cols-2 gap-3">
+          {investmentSummaries.map((item) => {
+            const gainLoss = item.current - item.invested;
+            const pct = item.invested > 0 ? (gainLoss / item.invested) * 100 : 0;
+            return (
+              <Card key={item.label} onClick={() => setActiveTab("investments")}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-[11px] font-semibold uppercase tracking-[0.1em] text-[color:var(--ink-4)]">{item.label}</span>
+                  <Chip tone={gainLoss >= 0 ? "emerald" : "rose"}>{pct >= 0 ? "+" : ""}{pct.toFixed(1)}%</Chip>
+                </div>
+                <div className="mt-2 font-display text-[20px] font-semibold tabular">{formatINR(item.current)}</div>
+                <div className="mt-1 text-[11px] text-[color:var(--ink-4)]">Invested {formatINR(item.invested)}</div>
+              </Card>
+            );
+          })}
+        </div>
+        {stockPortfolioSummaries.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {stockPortfolioSummaries.map(({ portfolio, totals }) => (
+              <div key={portfolio.id} className="flex items-center justify-between gap-3 rounded-[14px] bg-[color:var(--bg-2)] px-3 py-2 hairline">
+                <div className="min-w-0">
+                  <div className="truncate text-[12.5px] font-semibold">{portfolio.name}</div>
+                  <div className="text-[10.5px] text-[color:var(--ink-4)]">{portfolio.ownerName} / {portfolio.broker}</div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono-num text-[12.5px] font-semibold tabular">{formatINR(totals.current)}</div>
+                  <div className="text-[10.5px] text-[color:var(--ink-4)]">Inv {formatINR(totals.invested)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Card>
@@ -515,7 +593,7 @@ export default function Dashboard({
           <div>
             <div className="font-display text-[15px] font-semibold">{today.toLocaleDateString("en-IN", { month: "long" })} budget</div>
             <div className="text-[11.5px] text-[color:var(--ink-3)]">
-              {formatINR(Math.max(0, budget - monthExpense), { compact: true })} left · {daysRemaining} days remaining
+              {formatINR(Math.max(0, budget - currentMonthExpense))} left · {daysRemaining} days remaining
             </div>
           </div>
           <Ring value={budgetPct} size={54} stroke={7} color="var(--accent)">
@@ -530,8 +608,8 @@ export default function Dashboard({
         </div>
         <div className="mt-2 flex justify-between text-[10.5px] tabular text-[color:var(--ink-4)]">
           <span>₹0</span>
-          <span>Pace {formatINR(averageDailySpend * today.getDate(), { compact: true })}</span>
-          <span>{formatINR(budget, { compact: true })}</span>
+          <span>Pace {formatINR(averageDailySpend * today.getDate())}</span>
+          <span>{formatINR(budget)}</span>
         </div>
       </Card>
 
@@ -551,7 +629,7 @@ export default function Dashboard({
                 <BankBadge name={account.bankName} color={getAccountColor(index)} size={32} />
                 <Chip tone="slate">{account.accountType}</Chip>
               </div>
-              <div className="mt-2.5 font-display text-[17px] font-semibold tabular">{formatINR(account.balance, { compact: true })}</div>
+              <div className="mt-2.5 font-display text-[17px] font-semibold tabular">{formatINR(account.balance)}</div>
               <div className="text-[11px] text-[color:var(--ink-3)]">{account.bankName}</div>
               <div className="mt-0.5 font-mono-num text-[10.5px] text-[color:var(--ink-4)]">{account.accountNumber || "Wallet"}</div>
             </Card>
@@ -565,7 +643,16 @@ export default function Dashboard({
             <div className="font-display text-[15px] font-semibold">Spend by category</div>
             <div className="text-[11.5px] text-[color:var(--ink-3)]">{currentMonthLabel}</div>
           </div>
-          <button className="rounded-full bg-white/[0.04] px-2.5 py-1 text-[11px] text-[color:var(--ink-3)] hairline">Month ▾</button>
+          <select
+            value={selectedSpendMonth}
+            onChange={(event) => setSelectedSpendMonth(event.target.value)}
+            className="rounded-full bg-white/[0.04] px-2.5 py-1 text-[11px] text-[color:var(--ink-3)] outline-none hairline"
+            aria-label="Spend month"
+          >
+            {spendMonthOptions.map((option) => (
+              <option key={option.key} value={option.key}>{option.label}</option>
+            ))}
+          </select>
         </div>
         <div className="flex items-center gap-4">
           <Donut data={expenseBreakdown.slice(0, 6)} />
@@ -574,7 +661,7 @@ export default function Dashboard({
               <div key={item.label} className="flex items-center gap-2">
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: item.color }} />
                 <span className="flex-1 truncate text-[12px] text-[color:var(--ink-2)]">{item.label}</span>
-                <span className="font-mono-num text-[11.5px] tabular text-[color:var(--ink-3)]">{formatINR(item.amount, { compact: true })}</span>
+                <span className="font-mono-num text-[11.5px] tabular text-[color:var(--ink-3)]">{formatINR(item.amount)}</span>
               </div>
             ))}
             {expenseBreakdown.length === 0 && <div className="text-[12px] text-[color:var(--ink-4)]">No expenses recorded for this month.</div>}
@@ -589,7 +676,7 @@ export default function Dashboard({
             <div className="text-[11.5px] text-[color:var(--ink-3)]">Daily spend</div>
           </div>
           <span className="text-[11px] font-mono-num tabular text-[color:var(--ink-3)]">
-            avg {formatINR(recentDailySpend.reduce((sum, value) => sum + value, 0) / 14, { compact: true })}/day
+            avg {formatINR(recentDailySpend.reduce((sum, value) => sum + value, 0) / 14)}/day
           </span>
         </div>
         <Bars series={recentDailySpend} height={56} color="var(--neg)" />
@@ -615,7 +702,7 @@ export default function Dashboard({
                   <div className="truncate text-[13.5px] font-semibold">{item.title}</div>
                   <div className="truncate text-[11.5px] text-[color:var(--ink-4)]">{item.subtitle}</div>
                 </div>
-                <div className="font-mono-num text-[13.5px] tabular">{formatINR(item.amount, { compact: true })}</div>
+                <div className="font-mono-num text-[13.5px] tabular">{formatINR(item.amount)}</div>
               </div>
             );
           })}
