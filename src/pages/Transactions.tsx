@@ -46,10 +46,10 @@ type UnifiedTx = {
 function compactINR(amount: number) {
   const abs = Math.abs(amount);
   const sign = amount < 0 ? "-" : "";
-  if (abs >= 1e7) return `${sign}Rs${(abs / 1e7).toFixed(abs >= 1e8 ? 1 : 2)} Cr`;
-  if (abs >= 1e5) return `${sign}Rs${(abs / 1e5).toFixed(abs >= 1e6 ? 1 : 2)} L`;
-  if (abs >= 1e3) return `${sign}Rs${(abs / 1e3).toFixed(1)}k`;
-  return `${sign}Rs${abs.toFixed(0)}`;
+  return `${sign}Rs${new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs)}`;
 }
 
 function formatMobileGroupDate(date: string) {

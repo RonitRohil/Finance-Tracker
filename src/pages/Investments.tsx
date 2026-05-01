@@ -31,13 +31,36 @@ import {
 
 type InvestmentTab = "mf" | "stocks" | "fd" | "rd";
 
+type InvestmentTotals = {
+  invested: number;
+  current: number;
+};
+
 function compactINR(amount: number) {
   const abs = Math.abs(amount);
   const sign = amount < 0 ? "-" : "";
-  if (abs >= 1e7) return `${sign}Rs${(abs / 1e7).toFixed(abs >= 1e8 ? 1 : 2)} Cr`;
-  if (abs >= 1e5) return `${sign}Rs${(abs / 1e5).toFixed(abs >= 1e6 ? 1 : 2)} L`;
-  if (abs >= 1e3) return `${sign}Rs${(abs / 1e3).toFixed(1)}k`;
-  return `${sign}Rs${abs.toFixed(0)}`;
+  return `${sign}Rs${new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs)}`;
+}
+
+function getGainLoss(totals: InvestmentTotals) {
+  const amount = totals.current - totals.invested;
+  return {
+    amount,
+    pct: totals.invested > 0 ? (amount / totals.invested) * 100 : 0,
+  };
+}
+
+function getStockPortfolioTotals(portfolio: StockPortfolio): InvestmentTotals {
+  return portfolio.holdings.reduce(
+    (totals, holding) => ({
+      invested: totals.invested + holding.quantity * holding.avgBuyPrice,
+      current: totals.current + holding.quantity * holding.currentPrice,
+    }),
+    { invested: 0, current: 0 },
+  );
 }
 
 function SegmentedTabs({
@@ -101,6 +124,10 @@ export default function Investments({
   const rdCurrent = data.investments.rd.reduce((sum, rd) => sum + calculateRDValue(rd.monthlyDeposit, rd.interestRate, rd.startDate, rd.maturityDate), 0);
   const fdInvested = data.investments.fd.reduce((sum, fd) => sum + fd.principal, 0);
   const rdInvested = data.investments.rd.reduce((sum, rd) => sum + calculateRDInvested(rd.monthlyDeposit, rd.startDate, rd.maturityDate), 0);
+  const mutualFundTotals = { invested: mutualFundsInvested, current: mutualFundsCurrent };
+  const stockTotals = { invested: stocksInvested, current: stocksCurrent };
+  const fdTotals = { invested: fdInvested, current: fdCurrent };
+  const rdTotals = { invested: rdInvested, current: rdCurrent };
   const totalCurrent = mutualFundsCurrent + stocksCurrent + fdCurrent + rdCurrent;
   const totalInvested = mutualFundsInvested + stocksInvested + fdInvested + rdInvested;
   const pnl = totalCurrent - totalInvested;
@@ -114,6 +141,11 @@ export default function Investments({
   };
 
   const activePortfolio = data.investments.stockPortfolios.find((portfolio) => portfolio.id === activePortfolioId) || null;
+  const activePortfolioTotals = activePortfolio ? getStockPortfolioTotals(activePortfolio) : stockTotals;
+  const portfolioSummaries = data.investments.stockPortfolios.map((portfolio) => ({
+    portfolio,
+    totals: getStockPortfolioTotals(portfolio),
+  }));
 
   const openCreateForTab = () => {
     if (subTab === "stocks" && data.investments.stockPortfolios.length === 0) {
@@ -275,6 +307,7 @@ export default function Investments({
 
       {subTab === "mf" && (
         <div className="space-y-2.5">
+          <TotalsCard title="Mutual fund total" totals={mutualFundTotals} />
           {data.investments.mutualFunds.map((fund) => {
             const invested = getMutualFundInvestedAmount(fund);
             const gainLoss = fund.currentValue - invested;
@@ -343,6 +376,29 @@ export default function Investments({
 
           {activePortfolioId === "all" ? (
             <div className="space-y-2.5">
+              <TotalsCard title="All stock portfolios" totals={stockTotals} />
+              {portfolioSummaries.length > 0 && (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {portfolioSummaries.map(({ portfolio, totals }) => {
+                    const gainLoss = getGainLoss(totals);
+                    return (
+                      <Card key={portfolio.id}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-[13.5px] font-semibold">{portfolio.name}</div>
+                            <div className="mt-0.5 text-[11px] text-[color:var(--ink-4)]">{portfolio.ownerName} / {portfolio.broker}</div>
+                          </div>
+                          <Badge variant={gainLoss.amount >= 0 ? "success" : "danger"}>{gainLoss.pct >= 0 ? "+" : ""}{gainLoss.pct.toFixed(1)}%</Badge>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <StatMini label="Invested" value={compactINR(totals.invested)} />
+                          <StatMini label="Current" value={compactINR(totals.current)} />
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
               {stockHoldings.map((holding) => {
                 const gainLoss = holding.totalCurrentValue - holding.totalInvested;
                 const pct = holding.totalInvested > 0 ? (gainLoss / holding.totalInvested) * 100 : 0;
@@ -379,6 +435,7 @@ export default function Investments({
                   </div>
                 </div>
               </Card>
+              <TotalsCard title={`${activePortfolio.name} total`} totals={activePortfolioTotals} />
 
               {activePortfolio.holdings.map((holding) => {
                 const current = holding.quantity * holding.currentPrice;
@@ -419,6 +476,7 @@ export default function Investments({
 
       {subTab === "fd" && (
         <div className="space-y-2.5">
+          <TotalsCard title="Fixed deposit total" totals={fdTotals} />
           {data.investments.fd.map((fd) => {
             const current = calculateFDValue(fd.principal, fd.interestRate, fd.startDate, fd.maturityDate);
             return (
@@ -453,6 +511,7 @@ export default function Investments({
 
       {subTab === "rd" && (
         <div className="space-y-2.5">
+          <TotalsCard title="Recurring deposit total" totals={rdTotals} />
           {data.investments.rd.map((rd) => {
             const current = calculateRDValue(rd.monthlyDeposit, rd.interestRate, rd.startDate, rd.maturityDate);
             const invested = calculateRDInvested(rd.monthlyDeposit, rd.startDate, rd.maturityDate);
@@ -501,6 +560,34 @@ export default function Investments({
         onSaved={(id) => setActivePortfolioId(id)}
       />
     </div>
+  );
+}
+
+function TotalsCard({
+  title,
+  totals,
+}: {
+  title: string;
+  totals: InvestmentTotals;
+}) {
+  const gainLoss = getGainLoss(totals);
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[color:var(--ink-4)]">{title}</div>
+          <div className="mt-1 font-display text-[22px] font-semibold tabular">{formatCurrency(totals.current)}</div>
+        </div>
+        <Badge variant={gainLoss.amount >= 0 ? "success" : "danger"}>
+          {gainLoss.amount >= 0 ? "+" : ""}{compactINR(gainLoss.amount)} ({gainLoss.pct.toFixed(1)}%)
+        </Badge>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <StatMini label="Invested" value={compactINR(totals.invested)} />
+        <StatMini label="Current" value={compactINR(totals.current)} />
+      </div>
+    </Card>
   );
 }
 
