@@ -12,7 +12,7 @@ npm run lint      # ESLint
 npm run deploy    # build + push to GitHub Pages
 ```
 
-No test suite is configured.
+Run `npm test` to execute the Vitest unit test suite (`src/lib/__tests__/utils.test.ts`).
 
 ## Environment Variables
 
@@ -84,7 +84,7 @@ Broker CSV exports often use different names for the same stock. `stockNormalize
 
 ### Deployment
 
-GitHub Pages. Vite base is `/My-PortFolio/`. GitHub Actions builds and deploys; `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` must be set as repository secrets.
+GitHub Pages. Vite base is `/Finance-Tracker/`. GitHub Actions builds and deploys; `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` must be set as repository secrets.
 
 ## Rules
 
