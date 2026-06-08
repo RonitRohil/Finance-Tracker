@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+﻿import React, { useRef, useState } from "react";
 import initSqlJs from "sql.js";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import {
@@ -122,6 +122,7 @@ export default function Settings({
   >({});
   const [categoryEditor, setCategoryEditor] =
     useState<CategoryEditorState | null>(null);
+  const myMoneyFileInputRef = useRef<HTMLInputElement | null>(null);
   const incomeCategories = data.settings?.incomeCategories || [];
   const expenseCategories = data.settings?.expenseCategories || [];
   const accountCount = getAllAccounts(data).length;
@@ -292,8 +293,12 @@ export default function Settings({
       ).trim();
       const description = String(row.ZCONTENT || "").trim();
       const amount = Number(row.ZMONEY);
-      const timestamp = Number(row.ZDATE);
+      let timestamp = Number(row.ZDATE);
       const doType = Number(row.DO_TYPE);
+
+      if (Number.isFinite(timestamp) && timestamp > 0 && timestamp < 1e12) {
+        timestamp = timestamp * 1000;
+      }
 
       if (!Number.isFinite(amount) || !Number.isFinite(timestamp)) {
         invalidSkippedCount += 1;
@@ -592,18 +597,21 @@ export default function Settings({
           label="Import from myMoney (.sqlite)"
           hint="Read the Android SQLite export in-browser and merge matching entries."
           action={
-            <label className="block">
-              <span className="sr-only">Select SQLite file</span>
-              <div className="cursor-pointer">
-                <Button size="sm">Select SQLite File</Button>
-              </div>
+            <>
+              <Button
+                size="sm"
+                onClick={() => myMoneyFileInputRef.current?.click()}
+              >
+                Select SQLite File
+              </Button>
               <input
+                ref={myMoneyFileInputRef}
                 type="file"
                 accept=".sqlite,.db"
                 className="hidden"
                 onChange={handleMyMoneyImport}
               />
-            </label>
+            </>
           }
         />
       </Card>
