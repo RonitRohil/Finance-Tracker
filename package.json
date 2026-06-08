@@ -14,7 +14,6 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
-    "@google/genai": "^1.48.0",
     "@supabase/supabase-js": "^2.102.1",
     "@tailwindcss/vite": "^4.1.14",
     "clsx": "^2.1.1",

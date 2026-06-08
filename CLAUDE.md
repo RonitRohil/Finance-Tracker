@@ -21,7 +21,6 @@ Create `.env.local` (never commit real values):
 ```env
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
-GEMINI_API_KEY=your-gemini-key   # optional — AI insights fall back to static tips if absent
 ```
 
 ## Architecture
@@ -55,7 +54,6 @@ useAppData (src/hooks/useAppData.ts)
 | [src/utils/stockNormalizer.ts](src/utils/stockNormalizer.ts) | Groups holdings across brokers by normalized stock name |
 | [src/types.ts](src/types.ts) | All domain types — `PortfolioData` is the root shape |
 | [supabase/schema.sql](supabase/schema.sql) | Full Supabase schema, RLS policies, indexes |
-| [src/services/geminiService.ts](src/services/geminiService.ts) | Optional Gemini AI portfolio insights |
 
 ### Domain model (`PortfolioData`)
 
