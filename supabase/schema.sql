@@ -220,6 +220,20 @@ create index if not exists idx_transactions_type on transactions(user_id, type);
 create index if not exists idx_stock_holdings_portfolio on stock_holdings(portfolio_id);
 create index if not exists idx_mf_lumpsum_fund on mf_lumpsum_entries(fund_id);
 
+-- ─── Migration: idempotent import tracking ────────────────────────────────────
+-- Run once in the Supabase SQL Editor before deploying the myMoney transfer
+-- import feature.  Both ALTER statements are IF NOT EXISTS so re-running is safe.
+-- The partial unique index prevents the same external record from being
+-- double-imported while leaving all hand-entered rows (import_source IS NULL)
+-- unconstrained.
+
+alter table transactions add column if not exists import_source text;
+alter table transactions add column if not exists external_id text;
+
+create unique index if not exists idx_transactions_import_dedup
+  on transactions (user_id, import_source, external_id)
+  where import_source is not null and external_id is not null;
+
 -- ─── Migration: transactions → bank_accounts FKs now ON DELETE SET NULL ───────
 -- The CREATE TABLE above already defines the correct ON DELETE SET NULL behaviour
 -- for new databases.  Existing databases need this migration applied once in the

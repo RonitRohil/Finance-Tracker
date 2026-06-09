@@ -7,6 +7,7 @@ import {
   ExpenseCategory,
   IncomeSource,
   PaymentMethod,
+  TransferEntry,
 } from "../types";
 import {
   Badge,
@@ -25,21 +26,37 @@ import {
 import Icon from "../components/Icon";
 import { normalizeStockName } from "../utils/stockNormalizer";
 
+type AccountBreakdown = Record<
+  string,
+  { income: number; expense: number; transfer: number }
+>;
+
 type ImportSummary = {
   incomeCount: number;
   expenseCount: number;
+  transferCount: number;
   skippedCount: number;
   investmentSkippedCount: number;
   invalidSkippedCount: number;
   unmatchedSkippedCount: number;
   importedIncomeCategories: number;
   importedExpenseCategories: number;
+  accountBreakdown: AccountBreakdown;
+};
+
+type ImportPendingData = {
+  income: PortfolioData["income"];
+  expenses: PortfolioData["expenses"];
+  transfers: TransferEntry[];
+  incomeCategories: CategoryDefinition[];
+  expenseCategories: CategoryDefinition[];
 };
 
 type PendingMyMoneyImport = {
   accounts: string[];
   categoryRows: Record<string, any>;
   transactionRows: Record<string, any>[];
+  transferRows: Record<string, any>[];
   accountLookup: Record<string, string>;
 };
 
@@ -115,6 +132,8 @@ export default function Settings({
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(
     null,
   );
+  const [importPendingData, setImportPendingData] =
+    useState<ImportPendingData | null>(null);
   const [pendingImport, setPendingImport] =
     useState<PendingMyMoneyImport | null>(null);
   const [accountMappings, setAccountMappings] = useState<
@@ -220,6 +239,14 @@ export default function Settings({
          WHERE IS_DEL = 0 AND DO_TYPE IN ('0', '1')
          ORDER BY ZDATE ASC;`,
       );
+      // SELECT * captures relateUid (and any other schema variants) without
+      // breaking on databases that have a different column set.
+      const transferRows = queryRows(
+        db,
+        `SELECT * FROM INOUTCOME
+         WHERE IS_DEL = 0 AND DO_TYPE = '3'
+         ORDER BY ZDATE ASC, uid ASC;`,
+      );
 
       const accountLookup = Object.fromEntries(
         accountRows.map((row) => [row.uid, row.NIC_NAME]),
@@ -227,11 +254,21 @@ export default function Settings({
       const categories = Object.fromEntries(
         categoryRows.map((row) => [row.uid, row]),
       );
+      // Collect account names from both regular and transfer rows so all
+      // referenced accounts appear in the mapping UI.
+      const transferAccountNames = transferRows.map((row) =>
+        normalizeAccountName(
+          String(accountLookup[String(row.assetUid)] || row.ASSET_NIC || ""),
+        ),
+      );
       const myMoneyAccounts: string[] = Array.from(
         new Set(
-          accountRows
-            .map((row) => normalizeAccountName(String(row.NIC_NAME || "")))
-            .filter(Boolean),
+          [
+            ...accountRows.map((row) =>
+              normalizeAccountName(String(row.NIC_NAME || "")),
+            ),
+            ...transferAccountNames,
+          ].filter(Boolean),
         ),
       ) as string[];
       const initialMappings = Object.fromEntries(
@@ -245,6 +282,7 @@ export default function Settings({
         accounts: myMoneyAccounts,
         categoryRows: categories,
         transactionRows,
+        transferRows,
         accountLookup,
       });
     } catch (error) {
@@ -260,13 +298,24 @@ export default function Settings({
     window.setTimeout(() => window.print(), 200);
   };
 
-  const runMappedImport = () => {
+  // Computes the import dry-run (no writes).  Shows the summary modal so the
+  // user can review counts + per-account breakdown before confirming.
+  const computeImportPreview = () => {
     if (!pendingImport) return;
     let incomeCount = 0;
     let expenseCount = 0;
     let investmentSkippedCount = 0;
     let invalidSkippedCount = 0;
     let unmatchedSkippedCount = 0;
+    const breakdown: AccountBreakdown = {};
+    const addBreakdown = (
+      name: string,
+      type: "income" | "expense" | "transfer",
+    ) => {
+      if (!breakdown[name]) breakdown[name] = { income: 0, expense: 0, transfer: 0 };
+      breakdown[name][type]++;
+    };
+
     const importedCategories = extractImportedCategories(
       pendingImport.categoryRows,
     );
@@ -306,11 +355,11 @@ export default function Settings({
       }
 
       const date = new Date(timestamp).toISOString().slice(0, 10);
-
       const categoryLabel =
         getImportedCategoryLabel(category, pendingImport.categoryRows) ||
         categoryName ||
         description;
+      const accountName = mappedAccount?.bankName || sourceAccountName;
 
       if (doType === 0 || categoryType === 2) {
         incomeCount += 1;
@@ -323,8 +372,9 @@ export default function Settings({
           description:
             description || sourceAccountName || "Imported from myMoney",
           toAccountId: mappedAccountId,
-          toAccountName: mappedAccount?.bankName || sourceAccountName,
+          toAccountName: accountName,
         });
+        addBreakdown(accountName, "income");
         return;
       }
 
@@ -337,44 +387,155 @@ export default function Settings({
             categoryLabel || mapExpenseCategory(categoryName || description),
           amount,
           fromAccountId: mappedAccountId,
-          fromAccountName: mappedAccount?.bankName || sourceAccountName,
+          fromAccountName: accountName,
           paymentMethod: mapPaymentMethod(sourceAccountName),
           description: description || categoryName || "Imported from myMoney",
         });
+        addBreakdown(accountName, "expense");
         return;
       }
 
       unmatchedSkippedCount += 1;
     });
 
+    // ── Transfers ────────────────────────────────────────────────────────────
+    // myMoney represents a transfer as two paired INOUTCOME rows linked by
+    // relateUid (A.relateUid = B.uid, B.relateUid = A.uid).  We de-duplicate
+    // by processing only the first-seen row of each pair; the canonical id
+    // uses the lexicographically smaller uid so it is stable across re-imports
+    // regardless of iteration order.
+    let transferCount = 0;
+    const importedTransfers: TransferEntry[] = [];
+    const processed = new Set<string>();
+    const transferByUid = new Map<string, Record<string, any>>(
+      pendingImport.transferRows.map((row) => [String(row.uid), row]),
+    );
+
+    for (const row of pendingImport.transferRows) {
+      const uid = String(row.uid);
+      if (processed.has(uid)) continue;
+      processed.add(uid);
+
+      const relateUid =
+        row.relateUid != null ? String(row.relateUid) : null;
+      const partnerRow = relateUid ? (transferByUid.get(relateUid) ?? null) : null;
+      if (partnerRow) processed.add(String(partnerRow.uid));
+
+      // Stable id: lexicographically smaller uid wins as canonical
+      const canonicalUid =
+        partnerRow ? [uid, String(partnerRow.uid)].sort()[0] : uid;
+
+      const fromSourceName = normalizeAccountName(
+        String(
+          pendingImport.accountLookup[row.assetUid] || row.ASSET_NIC || "",
+        ),
+      );
+      const fromAccountId = accountMappings[fromSourceName] || "";
+      if (!fromAccountId || fromAccountId === "skip") {
+        investmentSkippedCount++;
+        continue;
+      }
+
+      let toSourceName = "";
+      let toAccountId = "";
+      if (partnerRow) {
+        toSourceName = normalizeAccountName(
+          String(
+            pendingImport.accountLookup[partnerRow.assetUid] ||
+              partnerRow.ASSET_NIC ||
+              "",
+          ),
+        );
+        toAccountId = accountMappings[toSourceName] || "";
+      }
+      if (!toAccountId || toAccountId === "skip") {
+        unmatchedSkippedCount++;
+        continue;
+      }
+
+      let timestamp = Number(row.ZDATE);
+      if (Number.isFinite(timestamp) && timestamp > 0 && timestamp < 1e12) {
+        timestamp *= 1000;
+      }
+      const amount = Math.abs(Number(row.ZMONEY));
+      if (!Number.isFinite(amount) || !Number.isFinite(timestamp)) {
+        invalidSkippedCount++;
+        continue;
+      }
+
+      const date = new Date(timestamp).toISOString().slice(0, 10);
+      const description = String(row.ZCONTENT || "").trim() || "Transfer";
+      const fromAccount = getAllAccounts(data).find(
+        (a) => a.id === fromAccountId,
+      );
+      const toAccount = getAllAccounts(data).find((a) => a.id === toAccountId);
+      const fromName = fromAccount?.bankName || fromSourceName;
+      const toName = toAccount?.bankName || toSourceName;
+
+      transferCount++;
+      importedTransfers.push({
+        id: `mymoney_t_${canonicalUid}`,
+        date,
+        amount,
+        fromAccountId,
+        fromAccountName: fromName,
+        toAccountId,
+        toAccountName: toName,
+        description,
+        fees: 0,
+      });
+      addBreakdown(fromName, "transfer");
+    }
+
     const skippedCount =
       investmentSkippedCount + invalidSkippedCount + unmatchedSkippedCount;
-    updateData({
-      income: mergeImportedEntries(data.income, importedIncome),
-      expenses: mergeImportedEntries(data.expenses, importedExpenses),
-      settings: {
-        ...data.settings,
-        incomeCategories: mergeImportedCategories(
-          incomeCategories,
-          importedCategories.income,
-        ),
-        expenseCategories: mergeImportedCategories(
-          expenseCategories,
-          importedCategories.expense,
-        ),
-      },
-    });
-    setPendingImport(null);
+
+    // Set preview state — actual write happens in commitImport()
     setImportSummary({
       incomeCount,
       expenseCount,
+      transferCount,
       skippedCount,
       investmentSkippedCount,
       invalidSkippedCount,
       unmatchedSkippedCount,
       importedIncomeCategories: importedCategories.income.length,
       importedExpenseCategories: importedCategories.expense.length,
+      accountBreakdown: breakdown,
     });
+    setImportPendingData({
+      income: importedIncome,
+      expenses: importedExpenses,
+      transfers: importedTransfers,
+      incomeCategories: importedCategories.income,
+      expenseCategories: importedCategories.expense,
+    });
+    setPendingImport(null);
+  };
+
+  const commitImport = () => {
+    if (!importPendingData) return;
+    updateData({
+      income: mergeImportedEntries(data.income, importPendingData.income),
+      expenses: mergeImportedEntries(data.expenses, importPendingData.expenses),
+      transfers: mergeImportedEntries(
+        data.transfers,
+        importPendingData.transfers,
+      ),
+      settings: {
+        ...data.settings,
+        incomeCategories: mergeImportedCategories(
+          incomeCategories,
+          importPendingData.incomeCategories,
+        ),
+        expenseCategories: mergeImportedCategories(
+          expenseCategories,
+          importPendingData.expenseCategories,
+        ),
+      },
+    });
+    setImportPendingData(null);
+    setImportSummary(null);
   };
 
   const handleSaveCategory = (
@@ -687,20 +848,60 @@ export default function Settings({
 
       <Modal
         isOpen={!!importSummary}
-        onClose={() => setImportSummary(null)}
-        title="myMoney Import Summary"
+        onClose={() => {
+          if (!importPendingData) setImportSummary(null);
+        }}
+        title={
+          importPendingData ? "Review Import" : "myMoney Import Summary"
+        }
       >
         {importSummary && (
           <div className="space-y-4">
             <Card className="bg-[color:var(--bg-3)] text-[12.5px] text-[color:var(--ink-2)]">
-              Imported {importSummary.incomeCount} income entries and{" "}
-              {importSummary.expenseCount} expense entries. Skipped{" "}
-              {importSummary.skippedCount} rows that were transfers,
-              investment-linked, invalid, or unmatched.
+              {importPendingData ? (
+                <>
+                  Ready to import{" "}
+                  <strong>{importSummary.incomeCount} income</strong>,{" "}
+                  <strong>{importSummary.expenseCount} expense</strong>, and{" "}
+                  <strong>{importSummary.transferCount} transfer</strong>{" "}
+                  entries. {importSummary.skippedCount > 0 && (
+                    <>{importSummary.skippedCount} rows will be skipped (investment-linked, invalid, or unmatched).</>
+                  )}
+                  {" "}Review the breakdown below, then confirm.
+                </>
+              ) : (
+                <>
+                  Imported {importSummary.incomeCount} income,{" "}
+                  {importSummary.expenseCount} expense, and{" "}
+                  {importSummary.transferCount} transfer entries. Skipped{" "}
+                  {importSummary.skippedCount} rows (investment-linked, invalid,
+                  or unmatched).
+                </>
+              )}
             </Card>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <MiniPanel
-                title="Investment skipped"
+                title="Income"
+                subtitle={String(importSummary.incomeCount)}
+                tone="var(--pos)"
+              />
+              <MiniPanel
+                title="Expense"
+                subtitle={String(importSummary.expenseCount)}
+                tone="var(--neg)"
+              />
+              <MiniPanel
+                title="Transfers"
+                subtitle={String(importSummary.transferCount)}
+                tone="var(--info)"
+              />
+              <MiniPanel
+                title="Skipped"
+                subtitle={String(importSummary.skippedCount)}
+                tone="var(--warn)"
+              />
+              <MiniPanel
+                title="Invest. skipped"
                 subtitle={String(importSummary.investmentSkippedCount)}
                 tone="var(--warn)"
               />
@@ -709,25 +910,64 @@ export default function Settings({
                 subtitle={String(importSummary.invalidSkippedCount)}
                 tone="var(--neg)"
               />
-              <MiniPanel
-                title="Unmatched rows"
-                subtitle={String(importSummary.unmatchedSkippedCount)}
-                tone="var(--info)"
-              />
-              <MiniPanel
-                title="Income merged"
-                subtitle={String(importSummary.importedIncomeCategories)}
-                tone="var(--pos)"
-              />
-              <MiniPanel
-                title="Expense merged"
-                subtitle={String(importSummary.importedExpenseCategories)}
-                tone="var(--warn)"
-              />
             </div>
-            <Button onClick={() => setImportSummary(null)} block>
-              Close
-            </Button>
+            {Object.keys(importSummary.accountBreakdown).length > 0 && (
+              <div>
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--ink-4)]">
+                  Per-account breakdown
+                </div>
+                <div className="overflow-hidden rounded-[14px] bg-[color:var(--bg-3)] hairline">
+                  <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 border-b border-white/[0.05] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[color:var(--ink-4)]">
+                    <span>Account</span>
+                    <span className="text-right">In</span>
+                    <span className="text-right">Out</span>
+                    <span className="text-right">Xfer</span>
+                  </div>
+                  {Object.entries(importSummary.accountBreakdown).map(
+                    ([name, counts]) => (
+                      <div
+                        key={name}
+                        className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 border-t border-white/[0.05] px-4 py-2.5 text-[12px] first:border-t-0"
+                      >
+                        <span className="truncate text-[color:var(--ink)]">
+                          {name}
+                        </span>
+                        <span className="text-right tabular-nums text-[color:var(--pos)]">
+                          {counts.income}
+                        </span>
+                        <span className="text-right tabular-nums text-[color:var(--neg)]">
+                          {counts.expense}
+                        </span>
+                        <span className="text-right tabular-nums text-[color:var(--info)]">
+                          {counts.transfer}
+                        </span>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
+            {importPendingData ? (
+              <div className="flex gap-3">
+                <Button
+                  variant="secondary"
+                  block
+                  onClick={() => {
+                    setImportSummary(null);
+                    setImportPendingData(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button block onClick={commitImport}>
+                  Confirm Import
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={() => setImportSummary(null)} block>
+                Close
+              </Button>
+            )}
           </div>
         )}
       </Modal>
@@ -747,8 +987,8 @@ export default function Settings({
             >
               Cancel
             </Button>
-            <Button type="button" block onClick={runMappedImport}>
-              Import Now
+            <Button type="button" block onClick={computeImportPreview}>
+              Preview Import
             </Button>
           </div>
         }
