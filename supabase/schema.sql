@@ -22,9 +22,9 @@ create table if not exists transactions (
   description text,
   category text,
   source text,
-  from_account_id text references bank_accounts(id),
+  from_account_id text references bank_accounts(id) on delete set null,
   from_account_name text,
-  to_account_id text references bank_accounts(id),
+  to_account_id text references bank_accounts(id) on delete set null,
   to_account_name text,
   payment_method text,
   fees numeric default 0,
@@ -219,3 +219,26 @@ create index if not exists idx_transactions_user_date on transactions(user_id, d
 create index if not exists idx_transactions_type on transactions(user_id, type);
 create index if not exists idx_stock_holdings_portfolio on stock_holdings(portfolio_id);
 create index if not exists idx_mf_lumpsum_fund on mf_lumpsum_entries(fund_id);
+
+-- ─── Migration: transactions → bank_accounts FKs now ON DELETE SET NULL ───────
+-- The CREATE TABLE above already defines the correct ON DELETE SET NULL behaviour
+-- for new databases.  Existing databases need this migration applied once in the
+-- Supabase SQL Editor (Dashboard → SQL Editor → paste and run).
+--
+-- Why: clearRemotePortfolioData deletes bank_accounts after all referencing rows
+-- have been removed, but any other code path that deletes a single bank account
+-- while transactions still reference it would have raised a FK violation under
+-- the old RESTRICT default.  SET NULL is the safe semantic: the account reference
+-- becomes NULL (already a nullable column) rather than blocking the delete.
+
+alter table transactions
+  drop constraint if exists transactions_from_account_id_fkey;
+alter table transactions
+  add constraint transactions_from_account_id_fkey
+    foreign key (from_account_id) references bank_accounts(id) on delete set null;
+
+alter table transactions
+  drop constraint if exists transactions_to_account_id_fkey;
+alter table transactions
+  add constraint transactions_to_account_id_fkey
+    foreign key (to_account_id) references bank_accounts(id) on delete set null;

@@ -19,7 +19,7 @@ import { PortfolioData } from "./types";
 
 function AppShell() {
   const { signOut } = useAuthSession();
-  const { data, loading, syncing, lastSync, updateData, clearAllData } = useAppData();
+  const { data, loading, syncing, lastSync, updateData, clearAllData, loadAll } = useAppData();
   const [activeTab, setActiveTab] = useState("dashboard");
   const validTabs = useMemo(() => new Set(["dashboard", "bank", "investments", "transactions", "loans", "stock-mappings", "settings"]), []);
 
@@ -96,7 +96,7 @@ function AppShell() {
   }
 
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab} data={data} updateData={patchData} lastSync={lastSync} syncing={syncing} onSignOut={signOut}>
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab} data={data} updateData={patchData} lastSync={lastSync} syncing={syncing} onSignOut={signOut} onRefresh={loadAll}>
       {renderContent()}
     </Layout>
   );

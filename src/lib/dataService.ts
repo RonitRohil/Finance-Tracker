@@ -316,6 +316,62 @@ function diffIds<T extends { id: string }>(previous: T[], next: T[]) {
   return previous.filter((item) => !nextIds.has(item.id)).map((item) => item.id);
 }
 
+// ─── Row-diff cache ────────────────────────────────────────────────────────────
+// Per-table map of id → stable row hash (updated_at / created_at excluded, keys
+// sorted) so persistPortfolioChanges can skip rows unchanged since the last fetch
+// or write.
+const rowSignatureCache = new Map<string, Map<string, string>>();
+
+function rowSignature(row: object): string {
+  const { updated_at: _u, created_at: _c, ...stable } = row as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const k of Object.keys(stable).sort()) sorted[k] = stable[k];
+  return JSON.stringify(sorted);
+}
+
+function getTableCache(table: string): Map<string, string> {
+  let m = rowSignatureCache.get(table);
+  if (!m) { m = new Map(); rowSignatureCache.set(table, m); }
+  return m;
+}
+
+function seedTableCache<T extends { id: string }>(table: string, rows: T[]): void {
+  const cache = getTableCache(table);
+  cache.clear();
+  for (const row of rows) cache.set(row.id, rowSignature(row));
+}
+
+/** Returns only rows that differ from the last-seen state; updates the cache. */
+function filterChanged<T extends { id: string }>(table: string, rows: T[]): T[] {
+  const cache = getTableCache(table);
+  const changed: T[] = [];
+  for (const row of rows) {
+    const sig = rowSignature(row);
+    if (cache.get(row.id) !== sig) { changed.push(row); cache.set(row.id, sig); }
+  }
+  return changed;
+}
+
+function evictCacheIds(table: string, ids: string[]): void {
+  const cache = getTableCache(table);
+  for (const id of ids) cache.delete(id);
+}
+
+function seedCacheFromPortfolioData(data: PortfolioData, userId: string): void {
+  seedTableCache(TABLES.bankAccounts, data.bankAccounts.map((a) => mapBankAccountToRow(a, userId)));
+  seedTableCache(TABLES.transactions, mapTransactionToRows(data, userId));
+  const { funds, lumpsums } = mapMutualFundRows(data.investments.mutualFunds, userId);
+  seedTableCache(TABLES.mutualFunds, funds);
+  seedTableCache(TABLES.mfLumpsumEntries, lumpsums);
+  const { portfolios, holdings } = mapStockPortfolioRows(data.investments.stockPortfolios, userId);
+  seedTableCache(TABLES.stockPortfolios, portfolios);
+  seedTableCache(TABLES.stockHoldings, holdings);
+  seedTableCache(TABLES.fixedDeposits, mapFixedDepositRows(data.investments.fd, userId));
+  seedTableCache(TABLES.recurringDeposits, mapRecurringDepositRows(data.investments.rd, userId));
+  seedTableCache(TABLES.loans, mapLoanRows(data.loans, userId));
+  seedTableCache(TABLES.recurringRules, mapRecurringRuleRows(data.recurringRules, userId));
+}
+
 function syncStockMappingsFromRemote(row?: SettingsRow | null) {
   if (!row?.stock_name_mappings) return;
   localStorage.setItem("stock_name_mappings", JSON.stringify(row.stock_name_mappings));
@@ -745,6 +801,7 @@ function buildPortfolioDataFromRows(rows: {
 }
 
 export async function fetchPortfolioData() {
+  const userId = await getUserId();
   const [
     bankAccounts,
     transactions,
@@ -771,7 +828,7 @@ export async function fetchPortfolioData() {
     fetchTable<SettingsRow>(TABLES.settings),
   ]);
 
-  return buildPortfolioDataFromRows({
+  const data = buildPortfolioDataFromRows({
     bankAccounts,
     transactions,
     mutualFunds,
@@ -784,6 +841,9 @@ export async function fetchPortfolioData() {
     recurringRules,
     settings,
   });
+
+  seedCacheFromPortfolioData(data, userId);
+  return data;
 }
 
 export function loadLegacyLocalData() {
@@ -805,55 +865,77 @@ export async function persistPortfolioChanges(
   const touched = new Set(keys);
 
   if (touched.has("bankAccounts")) {
-    await safeUpsertRows(TABLES.bankAccounts, next.bankAccounts.map((item) => mapBankAccountToRow(item, userId)));
-    await safeDeleteRows(TABLES.bankAccounts, diffIds(previous.bankAccounts, next.bankAccounts));
+    const nextRows = next.bankAccounts.map((item) => mapBankAccountToRow(item, userId));
+    await safeUpsertRows(TABLES.bankAccounts, filterChanged(TABLES.bankAccounts, nextRows));
+    const deletedIds = diffIds(previous.bankAccounts, next.bankAccounts);
+    await safeDeleteRows(TABLES.bankAccounts, deletedIds);
+    evictCacheIds(TABLES.bankAccounts, deletedIds);
   }
 
   if (touched.has("income") || touched.has("expenses") || touched.has("transfers")) {
-    const previousTransactions = mapTransactionToRows(previous, userId);
     const nextTransactions = mapTransactionToRows(next, userId);
-    await safeUpsertRows(TABLES.transactions, nextTransactions);
-    await safeDeleteRows(TABLES.transactions, diffIds(previousTransactions, nextTransactions));
+    await safeUpsertRows(TABLES.transactions, filterChanged(TABLES.transactions, nextTransactions));
+    const deletedTxIds = [
+      ...diffIds(previous.income, next.income),
+      ...diffIds(previous.expenses, next.expenses),
+      ...diffIds(previous.transfers, next.transfers),
+    ];
+    await safeDeleteRows(TABLES.transactions, deletedTxIds);
+    evictCacheIds(TABLES.transactions, deletedTxIds);
   }
 
   if (touched.has("investments")) {
-    const previousFundRows = mapMutualFundRows(previous.investments.mutualFunds, userId);
+    const prevFundRows = mapMutualFundRows(previous.investments.mutualFunds, userId);
     const nextFundRows = mapMutualFundRows(next.investments.mutualFunds, userId);
-    await safeUpsertRows(TABLES.mutualFunds, nextFundRows.funds);
-    await safeDeleteRows(TABLES.mutualFunds, diffIds(previousFundRows.funds, nextFundRows.funds));
-    await safeUpsertRows(TABLES.mfLumpsumEntries, nextFundRows.lumpsums);
-    await safeDeleteRows(TABLES.mfLumpsumEntries, diffIds(previousFundRows.lumpsums, nextFundRows.lumpsums));
+    await safeUpsertRows(TABLES.mutualFunds, filterChanged(TABLES.mutualFunds, nextFundRows.funds));
+    const deletedFunds = diffIds(previous.investments.mutualFunds, next.investments.mutualFunds);
+    await safeDeleteRows(TABLES.mutualFunds, deletedFunds);
+    evictCacheIds(TABLES.mutualFunds, deletedFunds);
 
-    const previousStockRows = mapStockPortfolioRows(previous.investments.stockPortfolios, userId);
+    await safeUpsertRows(TABLES.mfLumpsumEntries, filterChanged(TABLES.mfLumpsumEntries, nextFundRows.lumpsums));
+    const deletedLumpsums = diffIds(prevFundRows.lumpsums, nextFundRows.lumpsums);
+    await safeDeleteRows(TABLES.mfLumpsumEntries, deletedLumpsums);
+    evictCacheIds(TABLES.mfLumpsumEntries, deletedLumpsums);
+
+    const prevStockRows = mapStockPortfolioRows(previous.investments.stockPortfolios, userId);
     const nextStockRows = mapStockPortfolioRows(next.investments.stockPortfolios, userId);
-    await safeUpsertRows(TABLES.stockPortfolios, nextStockRows.portfolios);
-    await safeDeleteRows(TABLES.stockPortfolios, diffIds(previousStockRows.portfolios, nextStockRows.portfolios));
-    await safeUpsertRows(TABLES.stockHoldings, nextStockRows.holdings);
-    await safeDeleteRows(TABLES.stockHoldings, diffIds(previousStockRows.holdings, nextStockRows.holdings));
+    await safeUpsertRows(TABLES.stockPortfolios, filterChanged(TABLES.stockPortfolios, nextStockRows.portfolios));
+    const deletedPortfolios = diffIds(previous.investments.stockPortfolios, next.investments.stockPortfolios);
+    await safeDeleteRows(TABLES.stockPortfolios, deletedPortfolios);
+    evictCacheIds(TABLES.stockPortfolios, deletedPortfolios);
 
-    const previousFDs = mapFixedDepositRows(previous.investments.fd, userId);
+    await safeUpsertRows(TABLES.stockHoldings, filterChanged(TABLES.stockHoldings, nextStockRows.holdings));
+    const deletedHoldings = diffIds(prevStockRows.holdings, nextStockRows.holdings);
+    await safeDeleteRows(TABLES.stockHoldings, deletedHoldings);
+    evictCacheIds(TABLES.stockHoldings, deletedHoldings);
+
     const nextFDs = mapFixedDepositRows(next.investments.fd, userId);
-    await safeUpsertRows(TABLES.fixedDeposits, nextFDs);
-    await safeDeleteRows(TABLES.fixedDeposits, diffIds(previousFDs, nextFDs));
+    await safeUpsertRows(TABLES.fixedDeposits, filterChanged(TABLES.fixedDeposits, nextFDs));
+    const deletedFDs = diffIds(previous.investments.fd, next.investments.fd);
+    await safeDeleteRows(TABLES.fixedDeposits, deletedFDs);
+    evictCacheIds(TABLES.fixedDeposits, deletedFDs);
 
-    const previousRDs = mapRecurringDepositRows(previous.investments.rd, userId);
     const nextRDs = mapRecurringDepositRows(next.investments.rd, userId);
-    await safeUpsertRows(TABLES.recurringDeposits, nextRDs);
-    await safeDeleteRows(TABLES.recurringDeposits, diffIds(previousRDs, nextRDs));
+    await safeUpsertRows(TABLES.recurringDeposits, filterChanged(TABLES.recurringDeposits, nextRDs));
+    const deletedRDs = diffIds(previous.investments.rd, next.investments.rd);
+    await safeDeleteRows(TABLES.recurringDeposits, deletedRDs);
+    evictCacheIds(TABLES.recurringDeposits, deletedRDs);
   }
 
   if (touched.has("loans")) {
-    const previousRows = mapLoanRows(previous.loans, userId);
     const nextRows = mapLoanRows(next.loans, userId);
-    await safeUpsertRows(TABLES.loans, nextRows);
-    await safeDeleteRows(TABLES.loans, diffIds(previousRows, nextRows));
+    await safeUpsertRows(TABLES.loans, filterChanged(TABLES.loans, nextRows));
+    const deletedIds = diffIds(previous.loans, next.loans);
+    await safeDeleteRows(TABLES.loans, deletedIds);
+    evictCacheIds(TABLES.loans, deletedIds);
   }
 
   if (touched.has("recurringRules")) {
-    const previousRows = mapRecurringRuleRows(previous.recurringRules, userId);
     const nextRows = mapRecurringRuleRows(next.recurringRules, userId);
-    await safeUpsertRows(TABLES.recurringRules, nextRows);
-    await safeDeleteRows(TABLES.recurringRules, diffIds(previousRows, nextRows));
+    await safeUpsertRows(TABLES.recurringRules, filterChanged(TABLES.recurringRules, nextRows));
+    const deletedIds = diffIds(previous.recurringRules, next.recurringRules);
+    await safeDeleteRows(TABLES.recurringRules, deletedIds);
+    evictCacheIds(TABLES.recurringRules, deletedIds);
   }
 
   if (touched.has("settings")) {
@@ -862,19 +944,61 @@ export async function persistPortfolioChanges(
 }
 
 export async function clearRemotePortfolioData() {
-  await Promise.all([
-    supabase.from(TABLES.mfLumpsumEntries).delete().neq("id", ""),
-    supabase.from(TABLES.stockHoldings).delete().neq("id", ""),
-    supabase.from(TABLES.transactions).delete().neq("id", ""),
-    supabase.from(TABLES.bankAccounts).delete().neq("id", ""),
-    supabase.from(TABLES.mutualFunds).delete().neq("id", ""),
-    supabase.from(TABLES.stockPortfolios).delete().neq("id", ""),
-    supabase.from(TABLES.fixedDeposits).delete().neq("id", ""),
-    supabase.from(TABLES.recurringDeposits).delete().neq("id", ""),
-    supabase.from(TABLES.loans).delete().neq("id", ""),
-    supabase.from(TABLES.recurringRules).delete().neq("id", ""),
-    supabase.from(TABLES.settings).delete().eq("id", "singleton"),
-  ]);
+  // Deletes must be sequential and ordered to respect FK constraints.
+  // Full FK reference graph (→ = "column references table"):
+  //
+  //   mf_lumpsum_entries.fund_id          → mutual_funds        ON DELETE CASCADE
+  //   stock_holdings.portfolio_id          → stock_portfolios    ON DELETE CASCADE
+  //   transactions.from_account_id         → bank_accounts       ON DELETE SET NULL  ← schema.sql migration
+  //   transactions.to_account_id           → bank_accounts       ON DELETE SET NULL  ← schema.sql migration
+  //   mutual_funds.sip_from_account_id     → bank_accounts       NO ACTION
+  //   fixed_deposits.from_account_id       → bank_accounts       NO ACTION
+  //   recurring_deposits.from_account_id   → bank_accounts       NO ACTION
+  //
+  // Safe delete order:
+  //   Step 1 — leaf/child rows (clear before their parents):
+  //            mf_lumpsum_entries, stock_holdings, transactions
+  //   Step 2 — tables that hold FK references into bank_accounts (must precede it):
+  //            mutual_funds, fixed_deposits, recurring_deposits
+  //   Step 3 — independent tables (no remaining FK dependencies):
+  //            stock_portfolios, loans, recurring_rules
+  //   Step 4 — bank_accounts (safe now: transactions rows gone, sip/fd/rd rows gone)
+  //   Step 5 — settings (singleton row, no FK dependencies)
+
+  const del = async (table: string) => {
+    const { error } = await supabase.from(table).delete().neq("id", "");
+    if (error) throw new Error(`clear ${table}: ${error.message}`);
+  };
+
+  try {
+    // Step 1 — leaf / child rows
+    await del(TABLES.mfLumpsumEntries);
+    await del(TABLES.stockHoldings);
+    await del(TABLES.transactions);
+
+    // Step 2 — tables referencing bank_accounts (NO ACTION FKs)
+    await del(TABLES.mutualFunds);
+    await del(TABLES.fixedDeposits);
+    await del(TABLES.recurringDeposits);
+
+    // Step 3 — independent tables
+    await del(TABLES.stockPortfolios);
+    await del(TABLES.loans);
+    await del(TABLES.recurringRules);
+
+    // Step 4 — bank_accounts
+    await del(TABLES.bankAccounts);
+
+    // Step 5 — settings singleton
+    const { error } = await supabase.from(TABLES.settings).delete().eq("id", "singleton");
+    if (error) throw new Error(`clear settings: ${error.message}`);
+  } catch (error) {
+    throw new Error(
+      `clearRemotePortfolioData failed (database may be partially wiped): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 export function clearLocalAppCaches() {
