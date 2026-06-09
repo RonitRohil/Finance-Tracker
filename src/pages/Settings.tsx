@@ -7,6 +7,8 @@ import {
   ExpenseCategory,
   IncomeSource,
   PaymentMethod,
+  RecurringFrequency,
+  RecurringRule,
   TransferEntry,
 } from "../types";
 import {
@@ -19,9 +21,12 @@ import {
   Sheet,
 } from "../components/UI";
 import {
+  applyRecurringRuleEdit,
   computeAccountBalance,
   getAllAccounts,
   getCategoryDisplayPath,
+  getExpenseCategories,
+  getExpenseMethods,
   mergeImportedCategories,
 } from "../lib/utils";
 import Icon from "../components/Icon";
@@ -59,6 +64,11 @@ type PendingMyMoneyImport = {
   transactionRows: Record<string, any>[];
   transferRows: Record<string, any>[];
   accountLookup: Record<string, string>;
+};
+
+type RuleEditorState = {
+  mode: "create" | "edit";
+  rule: RecurringRule | null;
 };
 
 type CategoryEditorState = {
@@ -142,6 +152,11 @@ export default function Settings({
   >({});
   const [categoryEditor, setCategoryEditor] =
     useState<CategoryEditorState | null>(null);
+  const [ruleEditor, setRuleEditor] = useState<RuleEditorState | null>(null);
+  const [ruleEditScope, setRuleEditScope] = useState<{
+    newRule: RecurringRule;
+    changedWhat: string;
+  } | null>(null);
   const myMoneyFileInputRef = useRef<HTMLInputElement | null>(null);
   const incomeCategories = data.settings?.incomeCategories || [];
   const expenseCategories = data.settings?.expenseCategories || [];
@@ -552,6 +567,51 @@ export default function Settings({
     setCategoryEditor(null);
   };
 
+  const handleSaveRule = (newRule: RecurringRule) => {
+    if (ruleEditor?.mode === "create") {
+      updateData({ recurringRules: [...data.recurringRules, newRule] });
+      setRuleEditor(null);
+      return;
+    }
+    const oldRule = ruleEditor?.rule;
+    if (!oldRule) return;
+    const amountChanged = newRule.amount !== oldRule.amount;
+    const categoryChanged = newRule.category !== oldRule.category;
+    if (amountChanged || categoryChanged) {
+      setRuleEditScope({
+        newRule,
+        changedWhat:
+          amountChanged && categoryChanged
+            ? "amount and category"
+            : amountChanged
+              ? "amount"
+              : "category",
+      });
+      setRuleEditor(null);
+    } else {
+      updateData(applyRecurringRuleEdit(data, newRule, false));
+      setRuleEditor(null);
+    }
+  };
+
+  const handleRuleEditScope = (backfill: boolean) => {
+    if (!ruleEditScope) return;
+    updateData(applyRecurringRuleEdit(data, ruleEditScope.newRule, backfill));
+    setRuleEditScope(null);
+  };
+
+  const handleDeleteRule = (rule: RecurringRule) => {
+    if (
+      !confirm(
+        `Delete recurring rule "${rule.name}"?\n\nPast auto-generated entries will remain in the ledger.`,
+      )
+    )
+      return;
+    updateData({
+      recurringRules: data.recurringRules.filter((r) => r.id !== rule.id),
+    });
+  };
+
   const handleDeleteCategory = (category: CategoryDefinition) => {
     const label = getCategoryDisplayPath(
       category,
@@ -824,6 +884,68 @@ export default function Settings({
           </div>
         </Card>
       </div>
+
+      <SettingsSectionLabel title="Recurring Rules" />
+      <Card
+        title="Recurring Rules"
+        subtitle={`${data.recurringRules.length} rule${data.recurringRules.length !== 1 ? "s" : ""}${data.recurringRules.filter((r) => r.isActive).length > 0 ? ` · ${data.recurringRules.filter((r) => r.isActive).length} active` : ""}`}
+        action={
+          <Button
+            size="sm"
+            onClick={() => setRuleEditor({ mode: "create", rule: null })}
+          >
+            Add rule
+          </Button>
+        }
+      >
+        {data.recurringRules.length === 0 ? (
+          <p className="text-[12px] text-[color:var(--ink-4)]">
+            No recurring rules yet. Add one to auto-generate repeating expenses.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {data.recurringRules.map((rule) => (
+              <div
+                key={rule.id}
+                className="flex items-center gap-3 rounded-[14px] bg-[color:var(--bg-3)] px-3 py-2.5 hairline"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-[13px] font-semibold">
+                      {rule.name}
+                    </span>
+                    {!rule.isActive && (
+                      <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-[2px] text-[10px] text-[color:var(--ink-4)]">
+                        Paused
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[color:var(--ink-4)]">
+                    {FREQUENCY_LABELS[rule.frequency]} · ₹
+                    {rule.amount.toLocaleString("en-IN")} · {rule.category}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRuleEditor({ mode: "edit", rule })}
+                  className="grid h-7 w-7 place-items-center rounded-full text-[color:var(--ink-3)] transition hover:text-[color:var(--ink)]"
+                  aria-label="Edit rule"
+                >
+                  <Icon name="pencil" size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteRule(rule)}
+                  className="grid h-7 w-7 place-items-center rounded-full text-[color:var(--ink-3)] transition hover:text-[color:var(--neg)]"
+                  aria-label="Delete rule"
+                >
+                  <Icon name="trash" size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <SettingsSectionLabel title="Balance Integrity" />
       <Card padded={false}>
@@ -1102,6 +1224,44 @@ export default function Settings({
         onClose={() => setCategoryEditor(null)}
         onSave={handleSaveCategory}
       />
+
+      {ruleEditor && (
+        <RuleEditorModal
+          state={ruleEditor}
+          data={data}
+          onSave={handleSaveRule}
+          onClose={() => setRuleEditor(null)}
+        />
+      )}
+
+      <Modal
+        isOpen={!!ruleEditScope}
+        onClose={() => setRuleEditScope(null)}
+        title="Apply edit scope"
+      >
+        {ruleEditScope && (
+          <div className="space-y-4">
+            <p className="text-[13px] leading-relaxed text-[color:var(--ink-2)]">
+              You changed the <strong>{ruleEditScope.changedWhat}</strong> for{" "}
+              <strong>{ruleEditScope.newRule.name}</strong>. Past auto-generated
+              entries for this rule are already in the ledger. How should this
+              apply?
+            </p>
+            <div className="space-y-2">
+              <Button block onClick={() => handleRuleEditScope(false)}>
+                Going forward only
+              </Button>
+              <Button
+                block
+                variant="secondary"
+                onClick={() => handleRuleEditScope(true)}
+              >
+                Rewrite past auto entries
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -1305,6 +1465,181 @@ function CategoryManagerColumn({
         )}
       </div>
     </div>
+  );
+}
+
+const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
+  daily: "Daily",
+  weekdays: "Weekdays",
+  weekends: "Weekends",
+  weekly: "Weekly",
+  biweekly: "Every 2 weeks",
+  every4weeks: "Every 4 weeks",
+  monthly: "Monthly",
+  endofmonth: "End of month",
+  every2months: "Every 2 months",
+  every3months: "Every 3 months",
+  every4months: "Every 4 months",
+  every6months: "Every 6 months",
+  yearly: "Yearly",
+};
+
+function RuleEditorModal({
+  state,
+  data,
+  onSave,
+  onClose,
+}: {
+  state: RuleEditorState;
+  data: PortfolioData;
+  onSave: (rule: RecurringRule) => void;
+  onClose: () => void;
+}) {
+  const rule = state.rule;
+  const accounts = getAllAccounts(data);
+  const expenseCategories = getExpenseCategories(data);
+  const paymentMethods = getExpenseMethods();
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={state.mode === "create" ? "New Recurring Rule" : "Edit Rule"}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const fd = new FormData(e.currentTarget);
+          const frequency = String(
+            fd.get("frequency") || "monthly",
+          ) as RecurringFrequency;
+          const fromAccountId = String(fd.get("fromAccountId") || "") || null;
+          const fromAccount = accounts.find((a) => a.id === fromAccountId);
+          onSave({
+            id: rule?.id || `rule_${Date.now()}`,
+            name: String(fd.get("name") || "").trim(),
+            amount: Number(fd.get("amount")) || 0,
+            category: String(fd.get("category") || "Other"),
+            paymentMethod: String(
+              fd.get("paymentMethod") || "UPI",
+            ) as PaymentMethod,
+            fromAccountId: fromAccountId,
+            fromAccountName: fromAccount?.bankName ?? null,
+            frequency,
+            dayOfMonth: fd.get("dayOfMonth")
+              ? Number(fd.get("dayOfMonth"))
+              : undefined,
+            startDate: String(
+              fd.get("startDate") || new Date().toISOString().slice(0, 10),
+            ),
+            endDate: String(fd.get("endDate") || "") || null,
+            isActive: fd.get("isActive") !== null,
+            lastProcessedMonth: rule?.lastProcessedMonth,
+          });
+        }}
+        className="space-y-4"
+      >
+        <Input
+          label="Name"
+          name="name"
+          required
+          defaultValue={rule?.name || ""}
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Amount (₹)"
+            name="amount"
+            type="number"
+            min={0}
+            required
+            defaultValue={String(rule?.amount ?? "")}
+          />
+          <Select
+            label="Category"
+            name="category"
+            defaultValue={rule?.category || "Other"}
+          >
+            {expenseCategories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <Select
+          label="Frequency"
+          name="frequency"
+          defaultValue={rule?.frequency || "monthly"}
+        >
+          {(
+            Object.entries(FREQUENCY_LABELS) as [RecurringFrequency, string][]
+          ).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            label="Start date"
+            name="startDate"
+            type="date"
+            required
+            defaultValue={
+              rule?.startDate || new Date().toISOString().slice(0, 10)
+            }
+          />
+          <Input
+            label="End date (optional)"
+            name="endDate"
+            type="date"
+            defaultValue={rule?.endDate || ""}
+          />
+        </div>
+        <Select
+          label="From account"
+          name="fromAccountId"
+          defaultValue={rule?.fromAccountId || ""}
+        >
+          <option value="">— None —</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.bankName}
+            </option>
+          ))}
+        </Select>
+        <Select
+          label="Payment method"
+          name="paymentMethod"
+          defaultValue={rule?.paymentMethod || "UPI"}
+        >
+          {paymentMethods.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </Select>
+        <label className="flex cursor-pointer items-center justify-between rounded-[14px] bg-[color:var(--bg-3)] px-4 py-3 hairline">
+          <span className="text-[13px] font-medium text-[color:var(--ink)]">
+            Active
+          </span>
+          <input
+            type="checkbox"
+            name="isActive"
+            defaultChecked={rule?.isActive ?? true}
+            className="h-4 w-4 accent-[color:var(--accent)]"
+          />
+        </label>
+        <div className="flex gap-3 pt-2">
+          <Button type="submit" block>
+            {state.mode === "create" ? "Create Rule" : "Save Changes"}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
