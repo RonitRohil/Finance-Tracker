@@ -176,7 +176,6 @@ type RecurringRuleRow = {
 };
 
 type SettingsRow = {
-  id: string;
   user_id: string;
   monthly_budget: number | null;
   financial_year_mode: boolean | null;
@@ -705,7 +704,6 @@ function mapRecurringRuleRows(
 
 function mapSettingsRow(data: PortfolioData, userId: string): SettingsRow {
   return {
-    id: "singleton",
     user_id: userId,
     monthly_budget: data.settings.monthlyBudget,
     financial_year_mode: data.settings.yearView === "financial",
@@ -1165,11 +1163,11 @@ export async function clearRemotePortfolioData() {
     // Step 4 — bank_accounts
     await del(TABLES.bankAccounts);
 
-    // Step 5 — settings singleton
+    // Step 5 — settings (keyed on user_id after migration)
     const { error } = await supabase
       .from(TABLES.settings)
       .delete()
-      .eq("id", "singleton");
+      .not("user_id", "is", null);
     if (error) throw new Error(`clear settings: ${error.message}`);
   } catch (error) {
     throw new Error(

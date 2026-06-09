@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev       # start Vite dev server
 npm run build     # production build
 npm run preview   # preview production build locally
-npm run lint      # ESLint
+npm run lint      # TypeScript type check (tsc --noEmit)
 npm run deploy    # build + push to GitHub Pages
 ```
 
@@ -42,11 +42,14 @@ useAppData (src/hooks/useAppData.ts)
 
 | File | Role |
 |------|------|
-| [src/App.tsx](src/App.tsx) | Shell, tab routing, page rendering |
+| [src/App.tsx](src/App.tsx) | Shell, tab routing, unconfigured screen, error boundary root |
+| [src/components/ErrorBoundary.tsx](src/components/ErrorBoundary.tsx) | Class error boundary — catches render throws, shows recovery screen |
+| [src/components/Toast.tsx](src/components/Toast.tsx) | `useToastState` hook + `ToastStack` renderer — use instead of `alert()` |
 | [src/components/Layout.tsx](src/components/Layout.tsx) | Sidebar, header, mobile nav, global search, sync status |
 | [src/components/AuthGuard.tsx](src/components/AuthGuard.tsx) | Email/password sign-in, one-time local→Supabase migration trigger |
 | [src/hooks/useAppData.ts](src/hooks/useAppData.ts) | Central state + persistence hook |
 | [src/lib/dataService.ts](src/lib/dataService.ts) | Supabase read/write, offline buffer, migration helpers |
+| [src/lib/supabase.ts](src/lib/supabase.ts) | Supabase client; exports `supabaseConfigured` flag (no import-time throw) |
 | [src/lib/storage.ts](src/lib/storage.ts) | `normalizePortfolioData`, `INITIAL_DATA` |
 | [src/lib/utils.ts](src/lib/utils.ts) | Finance helpers: net worth, grouping, scheduler logic |
 | [src/lib/migrateToSupabase.ts](src/lib/migrateToSupabase.ts) | One-time legacy localStorage → Supabase migration |
@@ -76,6 +79,8 @@ settings               { monthlyBudget, yearView, incomeCategories, expenseCateg
 
 `bank_accounts`, `transactions` (income/expense/transfer unified), `mutual_funds`, `mf_lumpsum_entries`, `stock_portfolios`, `stock_holdings`, `fixed_deposits`, `recurring_deposits`, `loans`, `recurring_rules`, `settings`. All tables have RLS scoped to `auth.uid() = user_id`.
 
+`settings` is keyed on `user_id` (one row per user). The schema includes an idempotent migration that drops the old `id='singleton'` text primary key.
+
 ### Stock mapping
 
 Broker CSV exports often use different names for the same stock. `stockNormalizer.ts` normalizes and groups holdings. Custom mappings are stored in `localStorage` key `stock_name_mappings` and synced into the Supabase `settings` row. The [StockMappings page](src/pages/StockMappings.tsx) is the reconciliation workspace.
@@ -92,3 +97,5 @@ GitHub Pages. Vite base is `/Finance-Tracker/`. GitHub Actions builds and deploy
 - Do not change financial calculation logic in `utils.ts` unless explicitly asked.
 - Before touching schema-sensitive features, compare code against `supabase/schema.sql`.
 - Path alias `@/` maps to `src/`.
+- Never use `alert()` for user feedback — import `useToastState` and `ToastStack` from `src/components/Toast.tsx` instead.
+- `supabase` (from `src/lib/supabase.ts`) is `null` when `supabaseConfigured` is false. Never call it outside the auth-guarded render tree.

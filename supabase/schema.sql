@@ -283,3 +283,22 @@ alter table transactions
 alter table transactions
   add constraint transactions_to_account_id_fkey
     foreign key (to_account_id) references bank_accounts(id) on delete set null;
+
+-- ─── Migration: re-key settings on user_id (idempotent) ───────────────────────
+-- Replaces the global id='singleton' primary key with user_id so each user has
+-- a row identified by their auth UUID rather than a shared constant.
+-- The DO block makes this safe to re-run: it only acts when the id column
+-- still exists.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'settings'
+      and column_name  = 'id'
+  ) then
+    alter table settings drop constraint if exists settings_pkey;
+    alter table settings add primary key (user_id);
+    alter table settings drop column id;
+  end if;
+end $$;

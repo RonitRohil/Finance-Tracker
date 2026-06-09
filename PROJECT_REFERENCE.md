@@ -46,44 +46,44 @@ The app now uses Supabase as the primary database. `localStorage` is only used f
 
 ## App Entry and Main Structure
 
-- [src/App.tsx](/d:/Ronit/Personal/My-PortFolio/src/App.tsx)
+- [src/App.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/App.tsx)
   App shell, tab routing, auth guard usage, and page rendering.
-- [src/components/Layout.tsx](/d:/Ronit/Personal/My-PortFolio/src/components/Layout.tsx)
+- [src/components/Layout.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/components/Layout.tsx)
   Sidebar, header, mobile nav, global search, sync status, sign-out.
-- [src/components/AuthGuard.tsx](/d:/Ronit/Personal/My-PortFolio/src/components/AuthGuard.tsx)
+- [src/components/AuthGuard.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/components/AuthGuard.tsx)
   Email/password sign-in, session tracking, one-time local-to-Supabase migration trigger.
-- [src/hooks/useAppData.ts](/d:/Ronit/Personal/My-PortFolio/src/hooks/useAppData.ts)
+- [src/hooks/useAppData.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/hooks/useAppData.ts)
   Main state hook. Loads data, persists partial updates, handles online/offline sync.
 
 ## Important Pages
 
-- [src/pages/Dashboard.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Dashboard.tsx)
+- [src/pages/Dashboard.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Dashboard.tsx)
   Financial overview, summaries, warnings, category snapshot.
-- [src/pages/BankAccounts.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/BankAccounts.tsx)
+- [src/pages/BankAccounts.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/BankAccounts.tsx)
   Bank and cash accounts.
-- [src/pages/Transactions.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Transactions.tsx)
+- [src/pages/Transactions.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Transactions.tsx)
   Income, expense, transfer history and filtering.
-- [src/pages/Investments.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Investments.tsx)
+- [src/pages/Investments.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Investments.tsx)
   Mutual funds, stocks, FDs, RDs, portfolio import, stock-level summaries and sorting.
-- [src/pages/StockMappings.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/StockMappings.tsx)
+- [src/pages/StockMappings.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/StockMappings.tsx)
   Dedicated stock reconciliation page for cross-portfolio alias grouping and custom mappings.
-- [src/pages/LoansTracker.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/LoansTracker.tsx)
+- [src/pages/LoansTracker.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/LoansTracker.tsx)
   Loan and EMI tracking.
-- [src/pages/Settings.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Settings.tsx)
+- [src/pages/Settings.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Settings.tsx)
   Data management, category manager, import/export, destructive actions.
 
 ## Data Layer
 
 ### Primary client
 
-- [src/lib/supabase.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/supabase.ts)
+- [src/lib/supabase.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/supabase.ts)
   Creates the Supabase client from:
   - `VITE_SUPABASE_URL`
   - `VITE_SUPABASE_ANON_KEY`
 
 ### Persistence and sync
 
-- [src/lib/dataService.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/dataService.ts)
+- [src/lib/dataService.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/dataService.ts)
   Maps app models to Supabase rows and back.
 
 Responsibilities:
@@ -105,7 +105,7 @@ Responsibilities:
 
 ### Main schema
 
-See [supabase/schema.sql](/d:/Ronit/Personal/My-PortFolio/supabase/schema.sql).
+See [supabase/schema.sql](/d:/Ronit/Personal/projects/Finance-Tracker/supabase/schema.sql).
 
 Current tables:
 
@@ -127,7 +127,7 @@ RLS is enabled and scoped to `auth.uid() = user_id`.
 
 Most calculation and scheduling helpers live in:
 
-- [src/lib/utils.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/utils.ts)
+- [src/lib/utils.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/utils.ts)
 
 Important behavior already implemented:
 
@@ -141,7 +141,7 @@ Important behavior already implemented:
 
 Related scheduler hook:
 
-- [src/hooks/useAutoScheduler.ts](/d:/Ronit/Personal/My-PortFolio/src/hooks/useAutoScheduler.ts)
+- [src/hooks/useAutoScheduler.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/hooks/useAutoScheduler.ts)
 
 ## Stock Mapping and Grouping
 
@@ -149,9 +149,9 @@ Stock name reconciliation is important in this project because imports from Grow
 
 Key files:
 
-- [src/utils/stockNormalizer.ts](/d:/Ronit/Personal/My-PortFolio/src/utils/stockNormalizer.ts)
-- [src/pages/StockMappings.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/StockMappings.tsx)
-- [src/pages/Investments.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Investments.tsx)
+- [src/utils/stockNormalizer.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/utils/stockNormalizer.ts)
+- [src/pages/StockMappings.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/StockMappings.tsx)
+- [src/pages/Investments.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Investments.tsx)
 
 Current behavior:
 
@@ -176,7 +176,7 @@ On sign-in:
 
 Migration helper:
 
-- [src/lib/migrateToSupabase.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/migrateToSupabase.ts)
+- [src/lib/migrateToSupabase.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/migrateToSupabase.ts)
 
 ## Environment Variables
 
@@ -191,7 +191,7 @@ Do not commit real credentials.
 
 ## Build and Scripts
 
-From [package.json](/d:/Ronit/Personal/My-PortFolio/package.json):
+From [package.json](/d:/Ronit/Personal/projects/Finance-Tracker/package.json):
 
 - `npm run dev`
 - `npm run build`
@@ -216,17 +216,17 @@ From [package.json](/d:/Ronit/Personal/My-PortFolio/package.json):
 - When fixing dashboard labels, summaries, or cards, avoid touching calculation logic unless asked.
 - For stock work, prefer grouped and portfolio-aware reporting over flat mapping dumps.
 - For financial edits, check both data model impact and account-balance side effects.
-- Before changing schema-sensitive features, compare code with [supabase/schema.sql](/d:/Ronit/Personal/My-PortFolio/supabase/schema.sql).
+- Before changing schema-sensitive features, compare code with [supabase/schema.sql](/d:/Ronit/Personal/projects/Finance-Tracker/supabase/schema.sql).
 
 ## Good First Files To Read
 
 If you are a chatbot picking up work, start here:
 
-1. [src/App.tsx](/d:/Ronit/Personal/My-PortFolio/src/App.tsx)
-2. [src/hooks/useAppData.ts](/d:/Ronit/Personal/My-PortFolio/src/hooks/useAppData.ts)
-3. [src/lib/dataService.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/dataService.ts)
-4. [src/lib/utils.ts](/d:/Ronit/Personal/My-PortFolio/src/lib/utils.ts)
-5. [src/types.ts](/d:/Ronit/Personal/My-PortFolio/src/types.ts)
-6. [src/pages/Investments.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/Investments.tsx)
-7. [src/pages/StockMappings.tsx](/d:/Ronit/Personal/My-PortFolio/src/pages/StockMappings.tsx)
-8. [supabase/schema.sql](/d:/Ronit/Personal/My-PortFolio/supabase/schema.sql)
+1. [src/App.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/App.tsx)
+2. [src/hooks/useAppData.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/hooks/useAppData.ts)
+3. [src/lib/dataService.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/dataService.ts)
+4. [src/lib/utils.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/lib/utils.ts)
+5. [src/types.ts](/d:/Ronit/Personal/projects/Finance-Tracker/src/types.ts)
+6. [src/pages/Investments.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/Investments.tsx)
+7. [src/pages/StockMappings.tsx](/d:/Ronit/Personal/projects/Finance-Tracker/src/pages/StockMappings.tsx)
+8. [supabase/schema.sql](/d:/Ronit/Personal/projects/Finance-Tracker/supabase/schema.sql)

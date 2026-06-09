@@ -1,4 +1,5 @@
 ﻿import React, { useRef, useState } from "react";
+import { ToastStack, useToastState } from "../components/Toast";
 import initSqlJs from "sql.js";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import {
@@ -140,6 +141,7 @@ export default function Settings({
   setActiveTab: (tab: string) => void;
   clearAllData: () => Promise<void>;
 }) {
+  const { toasts, toast } = useToastState();
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(
     null,
   );
@@ -190,10 +192,10 @@ export default function Settings({
         const importedData = JSON.parse(loadEvent.target?.result as string);
         if (confirm("This will overwrite all current data. Are you sure?")) {
           updateData(normalizeImportedBackup(importedData, data));
-          alert("Data imported successfully.");
+          toast("Data imported successfully.", "success");
         }
       } catch {
-        alert("Invalid JSON file.");
+        toast("Invalid JSON file.", "error");
       }
     };
     reader.readAsText(file);
@@ -303,7 +305,7 @@ export default function Settings({
       });
     } catch (error) {
       console.error(error);
-      alert("Failed to import the myMoney SQLite backup.");
+      toast("Failed to import the myMoney SQLite backup.", "error");
     } finally {
       event.target.value = "";
     }
@@ -966,7 +968,7 @@ export default function Settings({
                   );
                 });
                 if (drifted.length === 0) {
-                  alert("All account balances are already in sync.");
+                  toast("All account balances are already in sync.", "info");
                   return;
                 }
                 if (
@@ -1262,6 +1264,8 @@ export default function Settings({
           </div>
         )}
       </Modal>
+
+      <ToastStack toasts={toasts} />
     </div>
   );
 }
