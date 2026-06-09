@@ -9,7 +9,7 @@ type IconName =
   | "upload" | "download" | "trash" | "pencil" | "more" | "menu"
   | "log-out" | "sparkle" | "pie" | "wallet" | "grid" | "link"
   | "sliders" | "inbox" | "zap" | "database" | "shield" | "lock"
-  | "globe" | "refresh" | "tags-2";
+  | "globe" | "refresh" | "tags-2" | "copy";
 
 interface IconProps {
   name: IconName;
@@ -77,6 +77,7 @@ export default function Icon({ name, size = 20, strokeWidth = 1.8, className = "
     case "lock":          return <svg {...p}><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>;
     case "globe":         return <svg {...p}><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>;
     case "refresh":       return <svg {...p}><path d="M4 12a8 8 0 0 1 14-5l2 2"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-14 5l-2-2"/><path d="M4 20v-4h4"/></svg>;
+    case "copy":          return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
     default:              return <svg {...p}><circle cx="12" cy="12" r="9"/></svg>;
   }
 }
