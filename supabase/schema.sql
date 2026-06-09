@@ -234,6 +234,33 @@ create unique index if not exists idx_transactions_import_dedup
   on transactions (user_id, import_source, external_id)
   where import_source is not null and external_id is not null;
 
+-- ─── Migration: opening_balance for hybrid balance model ──────────────────────
+-- opening_balance is the account balance BEFORE any transactions recorded in
+-- this app.  The app computes the "true" balance as:
+--   opening_balance + Σ(income in) - Σ(expense out) + Σ(transfer in) - Σ(transfer out+fees)
+-- and surfaces a drift indicator when it diverges from the stored balance.
+--
+-- One-time backfill for existing accounts (run once in Supabase SQL Editor):
+--   UPDATE bank_accounts ba
+--   SET opening_balance = ba.balance - COALESCE((
+--     SELECT SUM(
+--       CASE
+--         WHEN t.type = 'income'   THEN  t.amount
+--         WHEN t.type = 'expense'  THEN -t.amount
+--         WHEN t.type = 'transfer' AND t.to_account_id   = ba.id THEN  t.amount
+--         WHEN t.type = 'transfer' AND t.from_account_id = ba.id THEN -(t.amount + COALESCE(t.fees,0))
+--         ELSE 0
+--       END)
+--     FROM transactions t
+--     WHERE t.user_id = ba.user_id
+--       AND (t.to_account_id = ba.id OR t.from_account_id = ba.id)
+--   ), 0)
+--   WHERE opening_balance IS NULL;
+--
+-- New accounts have opening_balance set by the app at creation time.
+
+alter table bank_accounts add column if not exists opening_balance numeric;
+
 -- ─── Migration: transactions → bank_accounts FKs now ON DELETE SET NULL ───────
 -- The CREATE TABLE above already defines the correct ON DELETE SET NULL behaviour
 -- for new databases.  Existing databases need this migration applied once in the

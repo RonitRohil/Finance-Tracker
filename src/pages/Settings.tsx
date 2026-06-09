@@ -19,6 +19,7 @@ import {
   Sheet,
 } from "../components/UI";
 import {
+  computeAccountBalance,
   getAllAccounts,
   getCategoryDisplayPath,
   mergeImportedCategories,
@@ -312,7 +313,8 @@ export default function Settings({
       name: string,
       type: "income" | "expense" | "transfer",
     ) => {
-      if (!breakdown[name]) breakdown[name] = { income: 0, expense: 0, transfer: 0 };
+      if (!breakdown[name])
+        breakdown[name] = { income: 0, expense: 0, transfer: 0 };
       breakdown[name][type]++;
     };
 
@@ -416,14 +418,16 @@ export default function Settings({
       if (processed.has(uid)) continue;
       processed.add(uid);
 
-      const relateUid =
-        row.relateUid != null ? String(row.relateUid) : null;
-      const partnerRow = relateUid ? (transferByUid.get(relateUid) ?? null) : null;
+      const relateUid = row.relateUid != null ? String(row.relateUid) : null;
+      const partnerRow = relateUid
+        ? (transferByUid.get(relateUid) ?? null)
+        : null;
       if (partnerRow) processed.add(String(partnerRow.uid));
 
       // Stable id: lexicographically smaller uid wins as canonical
-      const canonicalUid =
-        partnerRow ? [uid, String(partnerRow.uid)].sort()[0] : uid;
+      const canonicalUid = partnerRow
+        ? [uid, String(partnerRow.uid)].sort()[0]
+        : uid;
 
       const fromSourceName = normalizeAccountName(
         String(
@@ -719,7 +723,9 @@ export default function Settings({
             <label className="block">
               <span className="sr-only">Import JSON backup</span>
               <div className="cursor-pointer">
-                <Button variant="secondary" size="sm">Import JSON</Button>
+                <Button variant="secondary" size="sm">
+                  Import JSON
+                </Button>
               </div>
               <input
                 type="file"
@@ -819,6 +825,60 @@ export default function Settings({
         </Card>
       </div>
 
+      <SettingsSectionLabel title="Balance Integrity" />
+      <Card padded={false}>
+        <SettingsListRow
+          icon="refresh"
+          label="Reconcile all accounts"
+          hint="Recompute every account balance from its opening balance and all recorded transactions. Only accounts with an opening balance set are affected."
+          action={
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                const accounts = getAllAccounts(data);
+                const drifted = accounts.filter((a) => {
+                  const computed = computeAccountBalance(data, a.id);
+                  return (
+                    computed !== undefined && Math.abs(computed - a.balance) > 1
+                  );
+                });
+                if (drifted.length === 0) {
+                  alert("All account balances are already in sync.");
+                  return;
+                }
+                if (
+                  !confirm(
+                    `Recompute balances for ${drifted.length} account${drifted.length > 1 ? "s" : ""}?\n\n` +
+                      drifted
+                        .map((a) => {
+                          const computed = computeAccountBalance(data, a.id)!;
+                          return `• ${a.bankName}: ₹${a.balance.toFixed(2)} → ₹${computed.toFixed(2)}`;
+                        })
+                        .join("\n"),
+                  )
+                )
+                  return;
+                updateData({
+                  bankAccounts: accounts.map((a) => {
+                    const computed = computeAccountBalance(data, a.id);
+                    if (
+                      computed !== undefined &&
+                      Math.abs(computed - a.balance) > 1
+                    ) {
+                      return { ...a, balance: computed };
+                    }
+                    return a;
+                  }),
+                });
+              }}
+            >
+              Reconcile
+            </Button>
+          }
+        />
+      </Card>
+
       <SettingsSectionLabel title="Danger Zone" />
       <Card padded={false}>
         <SettingsListRow
@@ -851,9 +911,7 @@ export default function Settings({
         onClose={() => {
           if (!importPendingData) setImportSummary(null);
         }}
-        title={
-          importPendingData ? "Review Import" : "myMoney Import Summary"
-        }
+        title={importPendingData ? "Review Import" : "myMoney Import Summary"}
       >
         {importSummary && (
           <div className="space-y-4">
@@ -864,10 +922,14 @@ export default function Settings({
                   <strong>{importSummary.incomeCount} income</strong>,{" "}
                   <strong>{importSummary.expenseCount} expense</strong>, and{" "}
                   <strong>{importSummary.transferCount} transfer</strong>{" "}
-                  entries. {importSummary.skippedCount > 0 && (
-                    <>{importSummary.skippedCount} rows will be skipped (investment-linked, invalid, or unmatched).</>
-                  )}
-                  {" "}Review the breakdown below, then confirm.
+                  entries.{" "}
+                  {importSummary.skippedCount > 0 && (
+                    <>
+                      {importSummary.skippedCount} rows will be skipped
+                      (investment-linked, invalid, or unmatched).
+                    </>
+                  )}{" "}
+                  Review the breakdown below, then confirm.
                 </>
               ) : (
                 <>
