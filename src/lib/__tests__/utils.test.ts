@@ -17,6 +17,14 @@ import {
   calculateFDValue,
   getRecurringOccurrences,
   getCombinedStockHoldings,
+  computeAccountBalance,
+  countUnlinkedTransactions,
+  getUpcomingInNext7Days,
+  SIP_AUTO_ID_PREFIX,
+  RD_AUTO_ID_PREFIX,
+  RECURRING_AUTO_ID_PREFIX,
+  SIP_SOURCE_PREFIX,
+  RD_SOURCE_PREFIX,
 } from "../utils";
 import { INITIAL_DATA } from "../storage";
 import type {
@@ -31,8 +39,19 @@ import type {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function makeAccount(id: string, balance = 1000): BankAccount {
-  return { id, bankName: id, accountType: "Savings", accountNumber: "", balance };
+function makeAccount(
+  id: string,
+  balance = 1000,
+  openingBalance?: number,
+): BankAccount {
+  return {
+    id,
+    bankName: id,
+    accountType: "Savings",
+    accountNumber: "",
+    balance,
+    openingBalance,
+  };
 }
 
 function makeData(accounts: BankAccount[]): PortfolioData {
@@ -129,13 +148,29 @@ describe("getExpenseBalanceDelta", () => {
 
 describe("getTransferBalanceDelta", () => {
   it("debits from + fees from source, credits amount to dest", () => {
-    const entry = makeTransfer({ amount: 1000, fees: 50, fromAccountId: "acc-a", toAccountId: "acc-b" });
-    expect(getTransferBalanceDelta(entry)).toEqual({ "acc-a": -1050, "acc-b": 1000 });
+    const entry = makeTransfer({
+      amount: 1000,
+      fees: 50,
+      fromAccountId: "acc-a",
+      toAccountId: "acc-b",
+    });
+    expect(getTransferBalanceDelta(entry)).toEqual({
+      "acc-a": -1050,
+      "acc-b": 1000,
+    });
   });
 
   it("works with zero fees", () => {
-    const entry = makeTransfer({ amount: 500, fees: 0, fromAccountId: "acc-x", toAccountId: "acc-y" });
-    expect(getTransferBalanceDelta(entry)).toEqual({ "acc-x": -500, "acc-y": 500 });
+    const entry = makeTransfer({
+      amount: 500,
+      fees: 0,
+      fromAccountId: "acc-x",
+      toAccountId: "acc-y",
+    });
+    expect(getTransferBalanceDelta(entry)).toEqual({
+      "acc-x": -500,
+      "acc-y": 500,
+    });
   });
 });
 
@@ -159,7 +194,10 @@ describe("combineBalanceDeltas", () => {
 
 describe("invertDeltas", () => {
   it("negates all values", () => {
-    expect(invertDeltas({ "acc-a": 500, "acc-b": -200 })).toEqual({ "acc-a": -500, "acc-b": 200 });
+    expect(invertDeltas({ "acc-a": 500, "acc-b": -200 })).toEqual({
+      "acc-a": -500,
+      "acc-b": 200,
+    });
   });
 
   it("returns an empty object for empty input", () => {
@@ -179,7 +217,9 @@ describe("saveExpenseEntry then deleteExpenseEntry nets to zero", () => {
     expect(accAfterSave.balance).toBe(600);
 
     const afterDelete = deleteExpenseEntry(afterSave, expense);
-    const accAfterDelete = afterDelete.bankAccounts.find((a) => a.id === "acc-a")!;
+    const accAfterDelete = afterDelete.bankAccounts.find(
+      (a) => a.id === "acc-a",
+    )!;
     expect(accAfterDelete.balance).toBe(1000);
   });
 });
@@ -190,25 +230,45 @@ describe("saveIncomeEntry then deleteIncomeEntry nets to zero", () => {
     const income = makeIncome({ amount: 3000, toAccountId: "acc-a" });
 
     const afterSave = saveIncomeEntry(initial, income);
-    expect(afterSave.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(3500);
+    expect(afterSave.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(
+      3500,
+    );
 
     const afterDelete = deleteIncomeEntry(afterSave, income);
-    expect(afterDelete.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(500);
+    expect(
+      afterDelete.bankAccounts.find((a) => a.id === "acc-a")!.balance,
+    ).toBe(500);
   });
 });
 
 describe("saveTransferEntry then deleteTransferEntry nets to zero", () => {
   it("restores both account balances after a round-trip", () => {
-    const initial = makeData([makeAccount("acc-a", 2000), makeAccount("acc-b", 500)]);
-    const transfer = makeTransfer({ amount: 800, fees: 10, fromAccountId: "acc-a", toAccountId: "acc-b" });
+    const initial = makeData([
+      makeAccount("acc-a", 2000),
+      makeAccount("acc-b", 500),
+    ]);
+    const transfer = makeTransfer({
+      amount: 800,
+      fees: 10,
+      fromAccountId: "acc-a",
+      toAccountId: "acc-b",
+    });
 
     const afterSave = saveTransferEntry(initial, transfer);
-    expect(afterSave.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(1190);
-    expect(afterSave.bankAccounts.find((a) => a.id === "acc-b")!.balance).toBe(1300);
+    expect(afterSave.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(
+      1190,
+    );
+    expect(afterSave.bankAccounts.find((a) => a.id === "acc-b")!.balance).toBe(
+      1300,
+    );
 
     const afterDelete = deleteTransferEntry(afterSave, transfer);
-    expect(afterDelete.bankAccounts.find((a) => a.id === "acc-a")!.balance).toBe(2000);
-    expect(afterDelete.bankAccounts.find((a) => a.id === "acc-b")!.balance).toBe(500);
+    expect(
+      afterDelete.bankAccounts.find((a) => a.id === "acc-a")!.balance,
+    ).toBe(2000);
+    expect(
+      afterDelete.bankAccounts.find((a) => a.id === "acc-b")!.balance,
+    ).toBe(500);
   });
 });
 
@@ -217,13 +277,23 @@ describe("saveTransferEntry then deleteTransferEntry nets to zero", () => {
 describe("calculateSIPInvested", () => {
   it("Stopped: uses stoppedDate, ignores today", () => {
     // Jan 2024 → Mar 2024 inclusive = 3 months
-    const result = calculateSIPInvested(5000, "2024-01-01", "Stopped", "2024-03-31");
+    const result = calculateSIPInvested(
+      5000,
+      "2024-01-01",
+      "Stopped",
+      "2024-03-31",
+    );
     expect(result).toBe(15000);
   });
 
   it("Stopped without stoppedDate falls back to today (non-zero)", () => {
     // start well in the past, no stoppedDate → uses today; result > 0
-    const result = calculateSIPInvested(1000, "2020-01-01", "Stopped", undefined);
+    const result = calculateSIPInvested(
+      1000,
+      "2020-01-01",
+      "Stopped",
+      undefined,
+    );
     expect(result).toBeGreaterThan(0);
   });
 
@@ -328,7 +398,12 @@ describe("calculateFDValue", () => {
     vi.setSystemTime(new Date("2027-01-01T00:00:00Z"));
     const atMaturity = calculateFDValue(100000, 7, "2025-01-01", "2027-01-01");
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
-    const afterMaturity = calculateFDValue(100000, 7, "2025-01-01", "2027-01-01");
+    const afterMaturity = calculateFDValue(
+      100000,
+      7,
+      "2025-01-01",
+      "2027-01-01",
+    );
     expect(afterMaturity).toBeCloseTo(atMaturity, 2);
     vi.useRealTimers();
   });
@@ -340,51 +415,94 @@ describe("getRecurringOccurrences", () => {
   const TODAY = "2025-03-31";
 
   it("daily — generates one entry per day in range", () => {
-    const rule = makeRule({ frequency: "daily", startDate: "2025-03-28", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "daily",
+      startDate: "2025-03-28",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
-    expect(dates).toEqual(["2025-03-28", "2025-03-29", "2025-03-30", "2025-03-31"]);
+    expect(dates).toEqual([
+      "2025-03-28",
+      "2025-03-29",
+      "2025-03-30",
+      "2025-03-31",
+    ]);
   });
 
   it("weekly — generates same weekday each week", () => {
     // 2025-03-03 is a Monday
-    const rule = makeRule({ frequency: "weekly", startDate: "2025-03-03", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "weekly",
+      startDate: "2025-03-03",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     // Mondays: Mar 3, 10, 17, 24, 31
-    expect(dates).toEqual(["2025-03-03", "2025-03-10", "2025-03-17", "2025-03-24", "2025-03-31"]);
+    expect(dates).toEqual([
+      "2025-03-03",
+      "2025-03-10",
+      "2025-03-17",
+      "2025-03-24",
+      "2025-03-31",
+    ]);
   });
 
   it("monthly — generates on the same day-of-month each month", () => {
-    const rule = makeRule({ frequency: "monthly", startDate: "2025-01-15", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-15",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     expect(dates).toEqual(["2025-01-15", "2025-02-15", "2025-03-15"]);
   });
 
   it("endofmonth — generates on the last day of each month", () => {
-    const rule = makeRule({ frequency: "endofmonth", startDate: "2025-01-01", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "endofmonth",
+      startDate: "2025-01-01",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     expect(dates).toEqual(["2025-01-31", "2025-02-28", "2025-03-31"]);
   });
 
   it("every3months — generates one entry every 3 months", () => {
-    const rule = makeRule({ frequency: "every3months", startDate: "2024-09-01", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "every3months",
+      startDate: "2024-09-01",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     expect(dates).toEqual(["2024-09-01", "2024-12-01", "2025-03-01"]);
   });
 
   it("yearly — generates once per year on the same date", () => {
-    const rule = makeRule({ frequency: "yearly", startDate: "2023-06-15", endDate: "2025-03-31" });
+    const rule = makeRule({
+      frequency: "yearly",
+      startDate: "2023-06-15",
+      endDate: "2025-03-31",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     expect(dates).toEqual(["2023-06-15", "2024-06-15"]);
   });
 
   it("returns empty array when today is before startDate", () => {
-    const rule = makeRule({ frequency: "monthly", startDate: "2026-01-01", endDate: null });
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2026-01-01",
+      endDate: null,
+    });
     const dates = getRecurringOccurrences(rule, "2025-01-01");
     expect(dates).toEqual([]);
   });
 
   it("respects endDate, not extending beyond it", () => {
-    const rule = makeRule({ frequency: "monthly", startDate: "2025-01-01", endDate: "2025-02-28" });
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-01",
+      endDate: "2025-02-28",
+    });
     const dates = getRecurringOccurrences(rule, TODAY);
     expect(dates).toEqual(["2025-01-01", "2025-02-01"]);
   });
@@ -393,8 +511,18 @@ describe("getRecurringOccurrences", () => {
 // ─── Stock merge ───────────────────────────────────────────────────────────────
 
 describe("getCombinedStockHoldings", () => {
-  function makePortfolio(id: string, owner: string, holdings: StockPortfolio["holdings"]): StockPortfolio {
-    return { id, name: `${owner} Portfolio`, ownerName: owner, broker: "Groww", holdings };
+  function makePortfolio(
+    id: string,
+    owner: string,
+    holdings: StockPortfolio["holdings"],
+  ): StockPortfolio {
+    return {
+      id,
+      name: `${owner} Portfolio`,
+      ownerName: owner,
+      broker: "Groww",
+      holdings,
+    };
   }
 
   it("merges holdings of the same stock across two portfolios", () => {
@@ -404,10 +532,24 @@ describe("getCombinedStockHoldings", () => {
         ...INITIAL_DATA.investments,
         stockPortfolios: [
           makePortfolio("p1", "Alice", [
-            { id: "s1", companyName: "Infosys Limited", ticker: "INFY", quantity: 10, avgBuyPrice: 1500, currentPrice: 1600 },
+            {
+              id: "s1",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 10,
+              avgBuyPrice: 1500,
+              currentPrice: 1600,
+            },
           ]),
           makePortfolio("p2", "Bob", [
-            { id: "s2", companyName: "Infosys Limited", ticker: "INFY", quantity: 5, avgBuyPrice: 1700, currentPrice: 1600 },
+            {
+              id: "s2",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 5,
+              avgBuyPrice: 1700,
+              currentPrice: 1600,
+            },
           ]),
         ],
       },
@@ -429,8 +571,22 @@ describe("getCombinedStockHoldings", () => {
         ...INITIAL_DATA.investments,
         stockPortfolios: [
           makePortfolio("p1", "Alice", [
-            { id: "s1", companyName: "HDFC Bank Limited", ticker: "HDFCBANK", quantity: 20, avgBuyPrice: 1800, currentPrice: 1900 },
-            { id: "s2", companyName: "Infosys Limited", ticker: "INFY", quantity: 10, avgBuyPrice: 1500, currentPrice: 1600 },
+            {
+              id: "s1",
+              companyName: "HDFC Bank Limited",
+              ticker: "HDFCBANK",
+              quantity: 20,
+              avgBuyPrice: 1800,
+              currentPrice: 1900,
+            },
+            {
+              id: "s2",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 10,
+              avgBuyPrice: 1500,
+              currentPrice: 1600,
+            },
           ]),
         ],
       },
@@ -450,8 +606,22 @@ describe("getCombinedStockHoldings", () => {
         ...INITIAL_DATA.investments,
         stockPortfolios: [
           makePortfolio("p1", "Alice", [
-            { id: "s1", companyName: "Infosys Limited", ticker: "INFY", quantity: 1, avgBuyPrice: 100, currentPrice: 100 },
-            { id: "s2", companyName: "HDFC Bank Limited", ticker: "HDFCBANK", quantity: 100, avgBuyPrice: 200, currentPrice: 200 },
+            {
+              id: "s1",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 1,
+              avgBuyPrice: 100,
+              currentPrice: 100,
+            },
+            {
+              id: "s2",
+              companyName: "HDFC Bank Limited",
+              ticker: "HDFCBANK",
+              quantity: 100,
+              avgBuyPrice: 200,
+              currentPrice: 200,
+            },
           ]),
         ],
       },
@@ -461,7 +631,10 @@ describe("getCombinedStockHoldings", () => {
   });
 
   it("returns empty array when no portfolios", () => {
-    const data: PortfolioData = { ...INITIAL_DATA, investments: { ...INITIAL_DATA.investments, stockPortfolios: [] } };
+    const data: PortfolioData = {
+      ...INITIAL_DATA,
+      investments: { ...INITIAL_DATA.investments, stockPortfolios: [] },
+    };
     expect(getCombinedStockHoldings(data)).toEqual([]);
   });
 
@@ -472,10 +645,24 @@ describe("getCombinedStockHoldings", () => {
         ...INITIAL_DATA.investments,
         stockPortfolios: [
           makePortfolio("p1", "Alice", [
-            { id: "s1", companyName: "Infosys Limited", ticker: "INFY", quantity: 10, avgBuyPrice: 1000, currentPrice: 1200 },
+            {
+              id: "s1",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 10,
+              avgBuyPrice: 1000,
+              currentPrice: 1200,
+            },
           ]),
           makePortfolio("p2", "Bob", [
-            { id: "s2", companyName: "Infosys Limited", ticker: "INFY", quantity: 10, avgBuyPrice: 2000, currentPrice: 1200 },
+            {
+              id: "s2",
+              companyName: "Infosys Limited",
+              ticker: "INFY",
+              quantity: 10,
+              avgBuyPrice: 2000,
+              currentPrice: 1200,
+            },
           ]),
         ],
       },
@@ -483,5 +670,336 @@ describe("getCombinedStockHoldings", () => {
     const combined = getCombinedStockHoldings(data);
     // (10*1000 + 10*2000) / 20 = 1500
     expect(combined[0].weightedAvgPrice).toBe(1500);
+  });
+});
+
+// ─── computeAccountBalance ────────────────────────────────────────────────────
+
+describe("computeAccountBalance", () => {
+  it("returns undefined when openingBalance is not set", () => {
+    const data = makeData([makeAccount("acc-a", 1000)]);
+    expect(computeAccountBalance(data, "acc-a")).toBeUndefined();
+  });
+
+  it("returns undefined for an unknown account id", () => {
+    const data = makeData([makeAccount("acc-a", 1000, 1000)]);
+    expect(computeAccountBalance(data, "acc-z")).toBeUndefined();
+  });
+
+  it("equals openingBalance when there are no transactions", () => {
+    const data = makeData([makeAccount("acc-a", 1000, 500)]);
+    expect(computeAccountBalance(data, "acc-a")).toBe(500);
+  });
+
+  it("adds income credited to the account", () => {
+    const data: PortfolioData = {
+      ...makeData([makeAccount("acc-a", 1000, 0)]),
+      income: [makeIncome({ amount: 3000, toAccountId: "acc-a" })],
+    };
+    expect(computeAccountBalance(data, "acc-a")).toBe(3000);
+  });
+
+  it("subtracts expenses debited from the account", () => {
+    const data: PortfolioData = {
+      ...makeData([makeAccount("acc-a", 1000, 5000)]),
+      expenses: [makeExpense({ amount: 400, fromAccountId: "acc-a" })],
+    };
+    expect(computeAccountBalance(data, "acc-a")).toBe(4600);
+  });
+
+  it("adds transfer-in and deducts transfer-out plus fees", () => {
+    const data: PortfolioData = {
+      ...makeData([
+        makeAccount("acc-a", 1000, 10000),
+        makeAccount("acc-b", 500, 500),
+      ]),
+      transfers: [
+        makeTransfer({
+          amount: 2000,
+          fees: 50,
+          fromAccountId: "acc-a",
+          toAccountId: "acc-b",
+        }),
+      ],
+    };
+    // acc-a: 10000 - 2000 - 50 = 7950
+    expect(computeAccountBalance(data, "acc-a")).toBe(7950);
+    // acc-b: 500 + 2000 = 2500
+    expect(computeAccountBalance(data, "acc-b")).toBe(2500);
+  });
+
+  it("handles multiple mixed transactions correctly", () => {
+    const data: PortfolioData = {
+      ...makeData([makeAccount("acc-a", 0, 1000)]),
+      income: [makeIncome({ amount: 5000, toAccountId: "acc-a" })],
+      expenses: [makeExpense({ amount: 800, fromAccountId: "acc-a" })],
+      transfers: [
+        makeTransfer({
+          amount: 500,
+          fees: 10,
+          fromAccountId: "acc-a",
+          toAccountId: "acc-b",
+        }),
+      ],
+    };
+    // 1000 + 5000 - 800 - 500 - 10 = 4690
+    expect(computeAccountBalance(data, "acc-a")).toBe(4690);
+  });
+
+  it("ignores income/expenses/transfers linked to other accounts", () => {
+    const data: PortfolioData = {
+      ...makeData([makeAccount("acc-a", 0, 2000), makeAccount("acc-b", 0, 0)]),
+      income: [makeIncome({ amount: 1000, toAccountId: "acc-b" })],
+      expenses: [makeExpense({ amount: 500, fromAccountId: "acc-b" })],
+    };
+    // acc-a has no transactions → equals its openingBalance
+    expect(computeAccountBalance(data, "acc-a")).toBe(2000);
+  });
+
+  it("detects drift when stored balance differs from computed", () => {
+    // Simulate a stored balance that drifted after an import
+    const openingBalance = 0;
+    const data: PortfolioData = {
+      ...makeData([makeAccount("acc-a", 9999 /* drifted */, openingBalance)]),
+      income: [makeIncome({ amount: 5000, toAccountId: "acc-a" })],
+      expenses: [makeExpense({ amount: 500, fromAccountId: "acc-a" })],
+    };
+    const computed = computeAccountBalance(data, "acc-a")!;
+    expect(computed).toBe(4500);
+    // stored balance (9999) differs from computed (4500) by more than ₹1 → drift
+    const storedBalance = data.bankAccounts.find(
+      (a) => a.id === "acc-a",
+    )!.balance;
+    expect(Math.abs(computed - storedBalance)).toBeGreaterThan(1);
+  });
+});
+
+// ─── Auto-entry ID constants (FP-0 constants refactor) ────────────────────────
+// These tests verify that the exported constants equal the historically hard-coded
+// strings, so the refactor is a pure rename with zero behaviour change.
+
+describe("auto-entry ID constant values", () => {
+  it("SIP_AUTO_ID_PREFIX equals the original inline literal", () => {
+    expect(SIP_AUTO_ID_PREFIX).toBe("sip_auto_");
+  });
+  it("RD_AUTO_ID_PREFIX equals the original inline literal", () => {
+    expect(RD_AUTO_ID_PREFIX).toBe("rd_auto_");
+  });
+  it("RECURRING_AUTO_ID_PREFIX equals the original inline literal", () => {
+    expect(RECURRING_AUTO_ID_PREFIX).toBe("rec_");
+  });
+  it("SIP_SOURCE_PREFIX equals the original inline literal", () => {
+    expect(SIP_SOURCE_PREFIX).toBe("sip:");
+  });
+  it("RD_SOURCE_PREFIX equals the original inline literal", () => {
+    expect(RD_SOURCE_PREFIX).toBe("rd:");
+  });
+});
+
+describe("auto-entry identity via countUnlinkedTransactions", () => {
+  it("SIP-generated expense (id prefix) is not counted as unlinked despite no fromAccountId", () => {
+    const data: PortfolioData = {
+      ...INITIAL_DATA,
+      bankAccounts: [],
+      income: [],
+      transfers: [],
+      expenses: [
+        makeExpense({
+          id: `${SIP_AUTO_ID_PREFIX}fund-1_2025-01`,
+          fromAccountId: null,
+          fromAccountName: null,
+          isAutoGenerated: true,
+          autoSourceId: `${SIP_SOURCE_PREFIX}fund-1`,
+        }),
+      ],
+    };
+    expect(countUnlinkedTransactions(data)).toBe(0);
+  });
+
+  it("SIP-generated expense (autoSourceId prefix) is not counted as unlinked", () => {
+    const data: PortfolioData = {
+      ...INITIAL_DATA,
+      bankAccounts: [],
+      income: [],
+      transfers: [],
+      expenses: [
+        makeExpense({
+          id: "some_other_id",
+          fromAccountId: null,
+          fromAccountName: null,
+          isAutoGenerated: true,
+          autoSourceId: `${SIP_SOURCE_PREFIX}fund-2`,
+        }),
+      ],
+    };
+    expect(countUnlinkedTransactions(data)).toBe(0);
+  });
+
+  it("RD-generated expense (id prefix) is not counted as unlinked despite no fromAccountId", () => {
+    const data: PortfolioData = {
+      ...INITIAL_DATA,
+      bankAccounts: [],
+      income: [],
+      transfers: [],
+      expenses: [
+        makeExpense({
+          id: `${RD_AUTO_ID_PREFIX}rd-1_2025-01`,
+          fromAccountId: null,
+          fromAccountName: null,
+          isAutoGenerated: true,
+          autoSourceId: `${RD_SOURCE_PREFIX}rd-1`,
+        }),
+      ],
+    };
+    expect(countUnlinkedTransactions(data)).toBe(0);
+  });
+
+  it("recurring-rule auto entry without fromAccountId IS counted as unlinked", () => {
+    // Recurring rule entries are regular cash expenses — they should have an account
+    const data: PortfolioData = {
+      ...INITIAL_DATA,
+      bankAccounts: [],
+      income: [],
+      transfers: [],
+      expenses: [
+        makeExpense({
+          id: `${RECURRING_AUTO_ID_PREFIX}rule-1_2025-01-15`,
+          fromAccountId: null,
+          fromAccountName: null,
+          isAutoGenerated: true,
+          recurringRuleId: "rule-1",
+        }),
+      ],
+    };
+    expect(countUnlinkedTransactions(data)).toBe(1);
+  });
+});
+
+// ─── getUpcomingInNext7Days ────────────────────────────────────────────────────
+
+describe("getUpcomingInNext7Days", () => {
+  const TODAY = "2025-03-10"; // Monday
+
+  function makePortfolioData(
+    overrides: Partial<PortfolioData> = {},
+  ): PortfolioData {
+    return {
+      ...INITIAL_DATA,
+      bankAccounts: [],
+      income: [],
+      expenses: [],
+      transfers: [],
+      ...overrides,
+    };
+  }
+
+  it("returns empty array when there are no rules, SIPs, or RDs", () => {
+    expect(getUpcomingInNext7Days(makePortfolioData(), TODAY)).toEqual([]);
+  });
+
+  it("includes a monthly rule occurrence that falls within 7 days", () => {
+    // Rule fires on the 12th; today is the 10th → 12th is 2 days out, inside window.
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-12",
+      endDate: null,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    expect(items.some((i) => i.date === "2025-03-12")).toBe(true);
+  });
+
+  it("excludes today — only strictly-future dates are returned", () => {
+    // Rule fires on the 10th (today); should NOT appear.
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-10",
+      endDate: null,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    expect(items.every((i) => i.date > TODAY)).toBe(true);
+  });
+
+  it("excludes dates beyond daysAhead", () => {
+    // Rule fires on the 20th — 10 days out, outside default 7-day window.
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-20",
+      endDate: null,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    expect(items.some((i) => i.date === "2025-03-20")).toBe(false);
+  });
+
+  it("respects daysAhead parameter", () => {
+    // With daysAhead=14, the 20th (10 days out) should appear.
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-20",
+      endDate: null,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY, 14);
+    expect(items.some((i) => i.date === "2025-03-20")).toBe(true);
+  });
+
+  it("skips inactive rules", () => {
+    const rule = makeRule({
+      frequency: "monthly",
+      startDate: "2025-01-12",
+      endDate: null,
+      isActive: false,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    expect(getUpcomingInNext7Days(data, TODAY)).toEqual([]);
+  });
+
+  it("includes weekly occurrences in the window", () => {
+    // Rule starts on a Monday (2025-03-03), fires weekly.
+    // Next after today (03-10, Monday) would be 03-10 itself (excluded) then 03-17.
+    // 03-17 is 7 days out — exactly at the horizon, should be included (<=).
+    const rule = makeRule({
+      frequency: "weekly",
+      startDate: "2025-03-03",
+      endDate: null,
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    expect(items.some((i) => i.date === "2025-03-17")).toBe(true);
+  });
+
+  it("returns results sorted by date ascending", () => {
+    const rule1 = makeRule({
+      id: "r1",
+      frequency: "monthly",
+      startDate: "2025-01-15",
+    });
+    const rule2 = makeRule({
+      id: "r2",
+      name: "Earlier",
+      frequency: "monthly",
+      startDate: "2025-01-11",
+    });
+    const data = makePortfolioData({ recurringRules: [rule1, rule2] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    const dates = items.map((i) => i.date);
+    expect(dates).toEqual([...dates].sort());
+  });
+
+  it("includes amount and label from the rule", () => {
+    const rule = makeRule({
+      name: "Rent",
+      amount: 12000,
+      frequency: "monthly",
+      startDate: "2025-01-12",
+    });
+    const data = makePortfolioData({ recurringRules: [rule] });
+    const items = getUpcomingInNext7Days(data, TODAY);
+    const item = items.find((i) => i.date === "2025-03-12")!;
+    expect(item.label).toBe("Rent");
+    expect(item.amount).toBe(12000);
+    expect(item.kind).toBe("recurring");
   });
 });

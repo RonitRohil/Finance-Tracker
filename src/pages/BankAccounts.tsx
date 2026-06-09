@@ -18,6 +18,7 @@ import {
   PortfolioData,
 } from "../types";
 import {
+  computeAccountBalance,
   formatCurrency,
   getAccountMonthlyStats,
   getAllAccounts,
@@ -265,10 +266,12 @@ export default function BankAccounts({
       return;
     }
 
-    // Creating new account
+    // Creating new account — anchor the opening balance so drift detection works
+    const initialBalance = Number(formData.get("balance")) || 0;
     const newAccount: BankAccount = {
       ...accountMeta,
-      balance: Number(formData.get("balance")) || 0,
+      balance: initialBalance,
+      openingBalance: initialBalance,
     };
     updateData({ bankAccounts: [...accounts, newAccount] });
     setIsModalOpen(false);
@@ -327,6 +330,9 @@ export default function BankAccounts({
             current.getFullYear(),
             current.getMonth(),
           );
+          const computed = computeAccountBalance(data, account.id);
+          const hasDrift =
+            computed !== undefined && Math.abs(computed - account.balance) > 1;
           return (
             <Card
               key={account.id}
@@ -347,11 +353,20 @@ export default function BankAccounts({
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="font-display text-[17px] font-semibold tabular">
-                    {formatCurrency(account.balance)}
+                  <div className="flex items-center justify-end gap-1.5">
+                    {hasDrift && (
+                      <span
+                        title="Balance may have drifted — tap to reconcile"
+                        className="h-2 w-2 rounded-full"
+                        style={{ background: "var(--warn)" }}
+                      />
+                    )}
+                    <div className="font-display text-[17px] font-semibold tabular">
+                      {formatCurrency(account.balance)}
+                    </div>
                   </div>
                   <div className="text-[10.5px] text-[color:var(--ink-4)]">
-                    Available
+                    {hasDrift ? "Drift detected" : "Available"}
                   </div>
                 </div>
               </div>
@@ -485,6 +500,52 @@ export default function BankAccounts({
                 </div>
               </Card>
             </div>
+
+            {(() => {
+              const computedBal = computeAccountBalance(data, openAccount.id);
+              if (computedBal === undefined) return null;
+              const drift = computedBal - openAccount.balance;
+              if (Math.abs(drift) <= 1) return null;
+              return (
+                <div
+                  className="mt-3 flex items-center justify-between rounded-[14px] bg-[color:var(--bg-3)] px-4 py-3 hairline"
+                  style={{
+                    borderColor:
+                      "color-mix(in oklch, var(--warn) 40%, transparent)",
+                  }}
+                >
+                  <div>
+                    <div
+                      className="text-[11px] font-semibold"
+                      style={{ color: "var(--warn)" }}
+                    >
+                      Balance drift detected
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-[color:var(--ink-4)]">
+                      Stored {compactINR(openAccount.balance)} · Computed{" "}
+                      {compactINR(computedBal)} ({drift > 0 ? "+" : ""}
+                      {compactINR(drift)})
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      updateData({
+                        bankAccounts: accounts.map((a) =>
+                          a.id === openAccount.id
+                            ? { ...a, balance: computedBal }
+                            : a,
+                        ),
+                      });
+                      setOpenId(null);
+                    }}
+                  >
+                    Recompute
+                  </Button>
+                </div>
+              );
+            })()}
 
             <div className="mb-1 mt-4 px-1 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-[color:var(--ink-4)]">
               Recent

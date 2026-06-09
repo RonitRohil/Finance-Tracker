@@ -6,6 +6,7 @@ export interface BankAccount {
   accountType: AccountType;
   accountNumber: string;
   balance: number;
+  openingBalance?: number;
   notes?: string;
   isCash?: boolean;
 }
@@ -99,7 +100,13 @@ export interface IncomeEntry {
 
 export type ExpenseCategory = string;
 
-export type PaymentMethod = "Cash" | "UPI" | "Card" | "Net Banking" | "NEFT/IMPS" | "Cheque";
+export type PaymentMethod =
+  | "Cash"
+  | "UPI"
+  | "Card"
+  | "Net Banking"
+  | "NEFT/IMPS"
+  | "Cheque";
 
 export interface ExpenseEntry {
   id: string;
@@ -127,7 +134,13 @@ export interface TransferEntry {
   fees: number;
 }
 
-export type LoanType = "Home" | "Personal" | "Vehicle" | "Education" | "Credit Card" | "Other";
+export type LoanType =
+  | "Home"
+  | "Personal"
+  | "Vehicle"
+  | "Education"
+  | "Credit Card"
+  | "Other";
 
 export interface Loan {
   id: string;

@@ -220,6 +220,47 @@ create index if not exists idx_transactions_type on transactions(user_id, type);
 create index if not exists idx_stock_holdings_portfolio on stock_holdings(portfolio_id);
 create index if not exists idx_mf_lumpsum_fund on mf_lumpsum_entries(fund_id);
 
+-- ─── Migration: idempotent import tracking ────────────────────────────────────
+-- Run once in the Supabase SQL Editor before deploying the myMoney transfer
+-- import feature.  Both ALTER statements are IF NOT EXISTS so re-running is safe.
+-- The partial unique index prevents the same external record from being
+-- double-imported while leaving all hand-entered rows (import_source IS NULL)
+-- unconstrained.
+
+alter table transactions add column if not exists import_source text;
+alter table transactions add column if not exists external_id text;
+
+create unique index if not exists idx_transactions_import_dedup
+  on transactions (user_id, import_source, external_id)
+  where import_source is not null and external_id is not null;
+
+-- ─── Migration: opening_balance for hybrid balance model ──────────────────────
+-- opening_balance is the account balance BEFORE any transactions recorded in
+-- this app.  The app computes the "true" balance as:
+--   opening_balance + Σ(income in) - Σ(expense out) + Σ(transfer in) - Σ(transfer out+fees)
+-- and surfaces a drift indicator when it diverges from the stored balance.
+--
+-- One-time backfill for existing accounts (run once in Supabase SQL Editor):
+--   UPDATE bank_accounts ba
+--   SET opening_balance = ba.balance - COALESCE((
+--     SELECT SUM(
+--       CASE
+--         WHEN t.type = 'income'   THEN  t.amount
+--         WHEN t.type = 'expense'  THEN -t.amount
+--         WHEN t.type = 'transfer' AND t.to_account_id   = ba.id THEN  t.amount
+--         WHEN t.type = 'transfer' AND t.from_account_id = ba.id THEN -(t.amount + COALESCE(t.fees,0))
+--         ELSE 0
+--       END)
+--     FROM transactions t
+--     WHERE t.user_id = ba.user_id
+--       AND (t.to_account_id = ba.id OR t.from_account_id = ba.id)
+--   ), 0)
+--   WHERE opening_balance IS NULL;
+--
+-- New accounts have opening_balance set by the app at creation time.
+
+alter table bank_accounts add column if not exists opening_balance numeric;
+
 -- ─── Migration: transactions → bank_accounts FKs now ON DELETE SET NULL ───────
 -- The CREATE TABLE above already defines the correct ON DELETE SET NULL behaviour
 -- for new databases.  Existing databases need this migration applied once in the
@@ -242,3 +283,22 @@ alter table transactions
 alter table transactions
   add constraint transactions_to_account_id_fkey
     foreign key (to_account_id) references bank_accounts(id) on delete set null;
+
+-- ─── Migration: re-key settings on user_id (idempotent) ───────────────────────
+-- Replaces the global id='singleton' primary key with user_id so each user has
+-- a row identified by their auth UUID rather than a shared constant.
+-- The DO block makes this safe to re-run: it only acts when the id column
+-- still exists.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name   = 'settings'
+      and column_name  = 'id'
+  ) then
+    alter table settings drop constraint if exists settings_pkey;
+    alter table settings add primary key (user_id);
+    alter table settings drop column id;
+  end if;
+end $$;

@@ -1,8 +1,8 @@
-# My Portfolio
+# Finance-Tracker
 
 Personal finance SPA for tracking bank accounts, transactions, investments, loans, recurring rules, and stock mappings across devices.
 
-This project now uses Supabase as the primary backend, with `localStorage` only kept for offline buffering, migration support, and local stock-name mappings.
+Uses Supabase as the primary backend. `localStorage` is kept only for offline buffering, migration support, and local stock-name mappings.
 
 ## Project Reference
 
@@ -25,6 +25,9 @@ That file explains the app structure, key files, data flow, Supabase schema, sto
 - dashboard with net worth, monthly cash flow, warnings, and category snapshots
 - Supabase auth and cloud sync
 - offline write buffering with reconnect flush
+- graceful "app not configured" screen when env vars are absent
+- toast notifications for import/export feedback (no browser alerts)
+- top-level error boundary with recovery screen
 
 ## Tech Stack
 
@@ -111,11 +114,17 @@ Main domains:
 ## Key Files
 
 - [src/App.tsx](./src/App.tsx)
-  app shell and page routing
+  app shell, page routing, unconfigured screen
+- [src/components/ErrorBoundary.tsx](./src/components/ErrorBoundary.tsx)
+  top-level render error recovery
+- [src/components/Toast.tsx](./src/components/Toast.tsx)
+  lightweight toast notifications (`useToastState` + `ToastStack`)
 - [src/hooks/useAppData.ts](./src/hooks/useAppData.ts)
   main state and persistence hook
 - [src/lib/dataService.ts](./src/lib/dataService.ts)
   Supabase read/write mapping and offline buffering
+- [src/lib/supabase.ts](./src/lib/supabase.ts)
+  Supabase client; exports `supabaseConfigured` flag
 - [src/lib/utils.ts](./src/lib/utils.ts)
   finance helpers, grouping, and scheduler logic
 - [src/pages/Investments.tsx](./src/pages/Investments.tsx)

@@ -38,6 +38,8 @@ type TransactionRow = {
   is_auto_generated: boolean | null;
   auto_source_id: string | null;
   recurring_rule_id: string | null;
+  import_source: string | null;
+  external_id: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -49,6 +51,7 @@ type BankAccountRow = {
   account_type: string;
   account_number: string | null;
   balance: number | null;
+  opening_balance?: number | null;
   notes: string | null;
   is_cash: boolean | null;
   created_at?: string;
@@ -173,7 +176,6 @@ type RecurringRuleRow = {
 };
 
 type SettingsRow = {
-  id: string;
   user_id: string;
   monthly_budget: number | null;
   financial_year_mode: boolean | null;
@@ -209,12 +211,19 @@ const TABLES = {
 
 function isLikelyOfflineError(error: unknown) {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return !navigator.onLine || message.includes("fetch") || message.includes("network") || message.includes("failed to fetch");
+  return (
+    !navigator.onLine ||
+    message.includes("fetch") ||
+    message.includes("network") ||
+    message.includes("failed to fetch")
+  );
 }
 
 function getBufferedWrites() {
   try {
-    return JSON.parse(localStorage.getItem(OFFLINE_BUFFER_KEY) || "[]") as BufferedWrite[];
+    return JSON.parse(
+      localStorage.getItem(OFFLINE_BUFFER_KEY) || "[]",
+    ) as BufferedWrite[];
   } catch {
     return [];
   }
@@ -245,10 +254,18 @@ async function fetchTable<T>(table: string) {
   return (data || []) as T[];
 }
 
-async function upsertRows(table: string, rows: Record<string, unknown>[]) {
+async function upsertRows(
+  table: string,
+  rows: Record<string, unknown>[],
+  chunkSize = 500,
+) {
   if (rows.length === 0) return;
-  const { error } = await supabase.from(table).upsert(rows);
-  if (error) throw error;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const { error } = await supabase
+      .from(table)
+      .upsert(rows.slice(i, i + chunkSize));
+    if (error) throw error;
+  }
 }
 
 async function deleteRows(table: string, ids: string[]) {
@@ -261,7 +278,9 @@ async function safeUpsertRows(table: string, rows: Record<string, unknown>[]) {
   if (rows.length === 0) return;
 
   if (!navigator.onLine) {
-    rows.forEach((row) => bufferOfflineWrite({ id: String(row.id), type: "upsert", table, row }));
+    rows.forEach((row) =>
+      bufferOfflineWrite({ id: String(row.id), type: "upsert", table, row }),
+    );
     return;
   }
 
@@ -269,7 +288,9 @@ async function safeUpsertRows(table: string, rows: Record<string, unknown>[]) {
     await upsertRows(table, rows);
   } catch (error) {
     if (!isLikelyOfflineError(error)) throw error;
-    rows.forEach((row) => bufferOfflineWrite({ id: String(row.id), type: "upsert", table, row }));
+    rows.forEach((row) =>
+      bufferOfflineWrite({ id: String(row.id), type: "upsert", table, row }),
+    );
   }
 }
 
@@ -313,7 +334,9 @@ export async function flushOfflineBuffer() {
 
 function diffIds<T extends { id: string }>(previous: T[], next: T[]) {
   const nextIds = new Set(next.map((item) => item.id));
-  return previous.filter((item) => !nextIds.has(item.id)).map((item) => item.id);
+  return previous
+    .filter((item) => !nextIds.has(item.id))
+    .map((item) => item.id);
 }
 
 // ─── Row-diff cache ────────────────────────────────────────────────────────────
@@ -323,7 +346,11 @@ function diffIds<T extends { id: string }>(previous: T[], next: T[]) {
 const rowSignatureCache = new Map<string, Map<string, string>>();
 
 function rowSignature(row: object): string {
-  const { updated_at: _u, created_at: _c, ...stable } = row as Record<string, unknown>;
+  const {
+    updated_at: _u,
+    created_at: _c,
+    ...stable
+  } = row as Record<string, unknown>;
   const sorted: Record<string, unknown> = {};
   for (const k of Object.keys(stable).sort()) sorted[k] = stable[k];
   return JSON.stringify(sorted);
@@ -331,23 +358,35 @@ function rowSignature(row: object): string {
 
 function getTableCache(table: string): Map<string, string> {
   let m = rowSignatureCache.get(table);
-  if (!m) { m = new Map(); rowSignatureCache.set(table, m); }
+  if (!m) {
+    m = new Map();
+    rowSignatureCache.set(table, m);
+  }
   return m;
 }
 
-function seedTableCache<T extends { id: string }>(table: string, rows: T[]): void {
+function seedTableCache<T extends { id: string }>(
+  table: string,
+  rows: T[],
+): void {
   const cache = getTableCache(table);
   cache.clear();
   for (const row of rows) cache.set(row.id, rowSignature(row));
 }
 
 /** Returns only rows that differ from the last-seen state; updates the cache. */
-function filterChanged<T extends { id: string }>(table: string, rows: T[]): T[] {
+function filterChanged<T extends { id: string }>(
+  table: string,
+  rows: T[],
+): T[] {
   const cache = getTableCache(table);
   const changed: T[] = [];
   for (const row of rows) {
     const sig = rowSignature(row);
-    if (cache.get(row.id) !== sig) { changed.push(row); cache.set(row.id, sig); }
+    if (cache.get(row.id) !== sig) {
+      changed.push(row);
+      cache.set(row.id, sig);
+    }
   }
   return changed;
 }
@@ -358,34 +397,60 @@ function evictCacheIds(table: string, ids: string[]): void {
 }
 
 function seedCacheFromPortfolioData(data: PortfolioData, userId: string): void {
-  seedTableCache(TABLES.bankAccounts, data.bankAccounts.map((a) => mapBankAccountToRow(a, userId)));
+  seedTableCache(
+    TABLES.bankAccounts,
+    data.bankAccounts.map((a) => mapBankAccountToRow(a, userId)),
+  );
   seedTableCache(TABLES.transactions, mapTransactionToRows(data, userId));
-  const { funds, lumpsums } = mapMutualFundRows(data.investments.mutualFunds, userId);
+  const { funds, lumpsums } = mapMutualFundRows(
+    data.investments.mutualFunds,
+    userId,
+  );
   seedTableCache(TABLES.mutualFunds, funds);
   seedTableCache(TABLES.mfLumpsumEntries, lumpsums);
-  const { portfolios, holdings } = mapStockPortfolioRows(data.investments.stockPortfolios, userId);
+  const { portfolios, holdings } = mapStockPortfolioRows(
+    data.investments.stockPortfolios,
+    userId,
+  );
   seedTableCache(TABLES.stockPortfolios, portfolios);
   seedTableCache(TABLES.stockHoldings, holdings);
-  seedTableCache(TABLES.fixedDeposits, mapFixedDepositRows(data.investments.fd, userId));
-  seedTableCache(TABLES.recurringDeposits, mapRecurringDepositRows(data.investments.rd, userId));
+  seedTableCache(
+    TABLES.fixedDeposits,
+    mapFixedDepositRows(data.investments.fd, userId),
+  );
+  seedTableCache(
+    TABLES.recurringDeposits,
+    mapRecurringDepositRows(data.investments.rd, userId),
+  );
   seedTableCache(TABLES.loans, mapLoanRows(data.loans, userId));
-  seedTableCache(TABLES.recurringRules, mapRecurringRuleRows(data.recurringRules, userId));
+  seedTableCache(
+    TABLES.recurringRules,
+    mapRecurringRuleRows(data.recurringRules, userId),
+  );
 }
 
 function syncStockMappingsFromRemote(row?: SettingsRow | null) {
   if (!row?.stock_name_mappings) return;
-  localStorage.setItem("stock_name_mappings", JSON.stringify(row.stock_name_mappings));
+  localStorage.setItem(
+    "stock_name_mappings",
+    JSON.stringify(row.stock_name_mappings),
+  );
 }
 
 function getLocalStockMappings() {
   try {
-    return JSON.parse(localStorage.getItem("stock_name_mappings") || "{}") as Record<string, string>;
+    return JSON.parse(
+      localStorage.getItem("stock_name_mappings") || "{}",
+    ) as Record<string, string>;
   } catch {
     return {};
   }
 }
 
-function mapBankAccountToRow(account: BankAccount, userId: string): BankAccountRow {
+function mapBankAccountToRow(
+  account: BankAccount,
+  userId: string,
+): BankAccountRow {
   return {
     id: account.id,
     user_id: userId,
@@ -393,13 +458,30 @@ function mapBankAccountToRow(account: BankAccount, userId: string): BankAccountR
     account_type: account.accountType,
     account_number: account.accountNumber || null,
     balance: account.balance,
+    opening_balance: account.openingBalance ?? null,
     notes: account.notes || null,
     is_cash: account.isCash ?? false,
     updated_at: new Date().toISOString(),
   };
 }
 
-function mapTransactionToRows(data: PortfolioData, userId: string): TransactionRow[] {
+function importMeta(id: string): {
+  import_source: string | null;
+  external_id: string | null;
+} {
+  if (id.startsWith("mymoney_")) {
+    return {
+      import_source: "mymoney",
+      external_id: id.slice("mymoney_".length),
+    };
+  }
+  return { import_source: null, external_id: null };
+}
+
+function mapTransactionToRows(
+  data: PortfolioData,
+  userId: string,
+): TransactionRow[] {
   const incomeRows: TransactionRow[] = data.income.map((entry) => ({
     id: entry.id,
     user_id: userId,
@@ -418,6 +500,7 @@ function mapTransactionToRows(data: PortfolioData, userId: string): TransactionR
     is_auto_generated: false,
     auto_source_id: null,
     recurring_rule_id: null,
+    ...importMeta(entry.id),
     updated_at: new Date().toISOString(),
   }));
 
@@ -439,6 +522,7 @@ function mapTransactionToRows(data: PortfolioData, userId: string): TransactionR
     is_auto_generated: entry.isAutoGenerated ?? false,
     recurring_rule_id: entry.recurringRuleId || null,
     auto_source_id: entry.autoSourceId || null,
+    ...importMeta(entry.id),
     updated_at: new Date().toISOString(),
   }));
 
@@ -460,13 +544,17 @@ function mapTransactionToRows(data: PortfolioData, userId: string): TransactionR
     is_auto_generated: false,
     auto_source_id: null,
     recurring_rule_id: null,
+    ...importMeta(entry.id),
     updated_at: new Date().toISOString(),
   }));
 
   return [...incomeRows, ...expenseRows, ...transferRows];
 }
 
-function mapMutualFundRows(funds: MutualFund[], userId: string): {
+function mapMutualFundRows(
+  funds: MutualFund[],
+  userId: string,
+): {
   funds: MutualFundRow[];
   lumpsums: MFLumpsumRow[];
 } {
@@ -500,7 +588,10 @@ function mapMutualFundRows(funds: MutualFund[], userId: string): {
   };
 }
 
-function mapStockPortfolioRows(portfolios: StockPortfolio[], userId: string): {
+function mapStockPortfolioRows(
+  portfolios: StockPortfolio[],
+  userId: string,
+): {
   portfolios: StockPortfolioRow[];
   holdings: StockHoldingRow[];
 } {
@@ -529,7 +620,10 @@ function mapStockPortfolioRows(portfolios: StockPortfolio[], userId: string): {
   };
 }
 
-function mapFixedDepositRows(items: FixedDeposit[], userId: string): FixedDepositRow[] {
+function mapFixedDepositRows(
+  items: FixedDeposit[],
+  userId: string,
+): FixedDepositRow[] {
   return items.map((item) => ({
     id: item.id,
     user_id: userId,
@@ -545,7 +639,10 @@ function mapFixedDepositRows(items: FixedDeposit[], userId: string): FixedDeposi
   }));
 }
 
-function mapRecurringDepositRows(items: RecurringDeposit[], userId: string): RecurringDepositRow[] {
+function mapRecurringDepositRows(
+  items: RecurringDeposit[],
+  userId: string,
+): RecurringDepositRow[] {
   return items.map((item) => ({
     id: item.id,
     user_id: userId,
@@ -579,7 +676,10 @@ function mapLoanRows(items: Loan[], userId: string): LoanRow[] {
   }));
 }
 
-function mapRecurringRuleRows(items: RecurringRule[], userId: string): RecurringRuleRow[] {
+function mapRecurringRuleRows(
+  items: RecurringRule[],
+  userId: string,
+): RecurringRuleRow[] {
   return items.map((rule) => ({
     id: rule.id,
     user_id: userId,
@@ -604,7 +704,6 @@ function mapRecurringRuleRows(items: RecurringRule[], userId: string): Recurring
 
 function mapSettingsRow(data: PortfolioData, userId: string): SettingsRow {
   return {
-    id: "singleton",
     user_id: userId,
     monthly_budget: data.settings.monthlyBudget,
     financial_year_mode: data.settings.yearView === "financial",
@@ -635,7 +734,8 @@ function rowToExpense(row: TransactionRow): ExpenseEntry {
     amount: Number(row.amount || 0),
     fromAccountId: row.from_account_id,
     fromAccountName: row.from_account_name,
-    paymentMethod: (row.payment_method || "UPI") as ExpenseEntry["paymentMethod"],
+    paymentMethod: (row.payment_method ||
+      "UPI") as ExpenseEntry["paymentMethod"],
     description: row.description || undefined,
     isAutoGenerated: row.is_auto_generated ?? false,
     recurringRuleId: row.recurring_rule_id || undefined,
@@ -670,7 +770,9 @@ function buildPortfolioDataFromRows(rows: {
   recurringRules: RecurringRuleRow[];
   settings: SettingsRow[];
 }) {
-  const lumpsumsByFund = rows.mfLumpsums.reduce<Record<string, MutualFund["lumpsumEntries"]>>((acc, row) => {
+  const lumpsumsByFund = rows.mfLumpsums.reduce<
+    Record<string, MutualFund["lumpsumEntries"]>
+  >((acc, row) => {
     acc[row.fund_id] = acc[row.fund_id] || [];
     acc[row.fund_id].push({
       id: row.id,
@@ -680,7 +782,9 @@ function buildPortfolioDataFromRows(rows: {
     return acc;
   }, {});
 
-  const holdingsByPortfolio = rows.stockHoldings.reduce<Record<string, Stock[]>>((acc, row) => {
+  const holdingsByPortfolio = rows.stockHoldings.reduce<
+    Record<string, Stock[]>
+  >((acc, row) => {
     acc[row.portfolio_id] = acc[row.portfolio_id] || [];
     acc[row.portfolio_id].push({
       id: row.id,
@@ -703,12 +807,20 @@ function buildPortfolioDataFromRows(rows: {
       accountType: row.account_type as BankAccount["accountType"],
       accountNumber: row.account_number || "",
       balance: Number(row.balance || 0),
+      openingBalance:
+        row.opening_balance != null ? Number(row.opening_balance) : undefined,
       notes: row.notes || undefined,
       isCash: row.is_cash ?? false,
     })),
-    income: rows.transactions.filter((row) => row.type === "income").map(rowToIncome),
-    expenses: rows.transactions.filter((row) => row.type === "expense").map(rowToExpense),
-    transfers: rows.transactions.filter((row) => row.type === "transfer").map(rowToTransfer),
+    income: rows.transactions
+      .filter((row) => row.type === "income")
+      .map(rowToIncome),
+    expenses: rows.transactions
+      .filter((row) => row.type === "expense")
+      .map(rowToExpense),
+    transfers: rows.transactions
+      .filter((row) => row.type === "transfer")
+      .map(rowToTransfer),
     investments: {
       mutualFunds: rows.mutualFunds.map((row) => ({
         id: row.id,
@@ -718,17 +830,20 @@ function buildPortfolioDataFromRows(rows: {
         currentValue: Number(row.current_value || 0),
         lumpsumEntries: lumpsumsByFund[row.id] || [],
         createdAt: row.created_at || undefined,
-        sipDetails: row.sip_monthly_amount && row.sip_start_date
-          ? {
-              monthlyAmount: Number(row.sip_monthly_amount),
-              startDate: row.sip_start_date,
-              status: (row.sip_status || "Active") as MutualFund["sipDetails"]["status"],
-              fromAccountId: row.sip_from_account_id || null,
-              fromAccountName: row.sip_from_account_name || null,
-              paymentMethod: (row.sip_payment_method || "Net Banking") as ExpenseEntry["paymentMethod"],
-              stoppedDate: row.sip_stopped_date || undefined,
-            }
-          : undefined,
+        sipDetails:
+          row.sip_monthly_amount && row.sip_start_date
+            ? {
+                monthlyAmount: Number(row.sip_monthly_amount),
+                startDate: row.sip_start_date,
+                status: (row.sip_status ||
+                  "Active") as MutualFund["sipDetails"]["status"],
+                fromAccountId: row.sip_from_account_id || null,
+                fromAccountName: row.sip_from_account_name || null,
+                paymentMethod: (row.sip_payment_method ||
+                  "Net Banking") as ExpenseEntry["paymentMethod"],
+                stoppedDate: row.sip_stopped_date || undefined,
+              }
+            : undefined,
       })),
       stockPortfolios: rows.stockPortfolios.map((row) => ({
         id: row.id,
@@ -757,7 +872,8 @@ function buildPortfolioDataFromRows(rows: {
         maturityDate: row.maturity_date,
         fromAccountId: row.from_account_id || null,
         fromAccountName: row.from_account_name || null,
-        paymentMethod: (row.payment_method || "Net Banking") as ExpenseEntry["paymentMethod"],
+        paymentMethod: (row.payment_method ||
+          "Net Banking") as ExpenseEntry["paymentMethod"],
         createdAt: row.created_at || undefined,
       })),
     },
@@ -778,7 +894,8 @@ function buildPortfolioDataFromRows(rows: {
       name: row.name,
       amount: Number(row.amount || 0),
       category: row.category || "Other",
-      paymentMethod: (row.payment_method || "UPI") as RecurringRule["paymentMethod"],
+      paymentMethod: (row.payment_method ||
+        "UPI") as RecurringRule["paymentMethod"],
       fromAccountId: row.from_account_id,
       fromAccountName: row.from_account_name,
       description: row.description || undefined,
@@ -865,16 +982,28 @@ export async function persistPortfolioChanges(
   const touched = new Set(keys);
 
   if (touched.has("bankAccounts")) {
-    const nextRows = next.bankAccounts.map((item) => mapBankAccountToRow(item, userId));
-    await safeUpsertRows(TABLES.bankAccounts, filterChanged(TABLES.bankAccounts, nextRows));
+    const nextRows = next.bankAccounts.map((item) =>
+      mapBankAccountToRow(item, userId),
+    );
+    await safeUpsertRows(
+      TABLES.bankAccounts,
+      filterChanged(TABLES.bankAccounts, nextRows),
+    );
     const deletedIds = diffIds(previous.bankAccounts, next.bankAccounts);
     await safeDeleteRows(TABLES.bankAccounts, deletedIds);
     evictCacheIds(TABLES.bankAccounts, deletedIds);
   }
 
-  if (touched.has("income") || touched.has("expenses") || touched.has("transfers")) {
+  if (
+    touched.has("income") ||
+    touched.has("expenses") ||
+    touched.has("transfers")
+  ) {
     const nextTransactions = mapTransactionToRows(next, userId);
-    await safeUpsertRows(TABLES.transactions, filterChanged(TABLES.transactions, nextTransactions));
+    await safeUpsertRows(
+      TABLES.transactions,
+      filterChanged(TABLES.transactions, nextTransactions),
+    );
     const deletedTxIds = [
       ...diffIds(previous.income, next.income),
       ...diffIds(previous.expenses, next.expenses),
@@ -885,38 +1014,80 @@ export async function persistPortfolioChanges(
   }
 
   if (touched.has("investments")) {
-    const prevFundRows = mapMutualFundRows(previous.investments.mutualFunds, userId);
-    const nextFundRows = mapMutualFundRows(next.investments.mutualFunds, userId);
-    await safeUpsertRows(TABLES.mutualFunds, filterChanged(TABLES.mutualFunds, nextFundRows.funds));
-    const deletedFunds = diffIds(previous.investments.mutualFunds, next.investments.mutualFunds);
+    const prevFundRows = mapMutualFundRows(
+      previous.investments.mutualFunds,
+      userId,
+    );
+    const nextFundRows = mapMutualFundRows(
+      next.investments.mutualFunds,
+      userId,
+    );
+    await safeUpsertRows(
+      TABLES.mutualFunds,
+      filterChanged(TABLES.mutualFunds, nextFundRows.funds),
+    );
+    const deletedFunds = diffIds(
+      previous.investments.mutualFunds,
+      next.investments.mutualFunds,
+    );
     await safeDeleteRows(TABLES.mutualFunds, deletedFunds);
     evictCacheIds(TABLES.mutualFunds, deletedFunds);
 
-    await safeUpsertRows(TABLES.mfLumpsumEntries, filterChanged(TABLES.mfLumpsumEntries, nextFundRows.lumpsums));
-    const deletedLumpsums = diffIds(prevFundRows.lumpsums, nextFundRows.lumpsums);
+    await safeUpsertRows(
+      TABLES.mfLumpsumEntries,
+      filterChanged(TABLES.mfLumpsumEntries, nextFundRows.lumpsums),
+    );
+    const deletedLumpsums = diffIds(
+      prevFundRows.lumpsums,
+      nextFundRows.lumpsums,
+    );
     await safeDeleteRows(TABLES.mfLumpsumEntries, deletedLumpsums);
     evictCacheIds(TABLES.mfLumpsumEntries, deletedLumpsums);
 
-    const prevStockRows = mapStockPortfolioRows(previous.investments.stockPortfolios, userId);
-    const nextStockRows = mapStockPortfolioRows(next.investments.stockPortfolios, userId);
-    await safeUpsertRows(TABLES.stockPortfolios, filterChanged(TABLES.stockPortfolios, nextStockRows.portfolios));
-    const deletedPortfolios = diffIds(previous.investments.stockPortfolios, next.investments.stockPortfolios);
+    const prevStockRows = mapStockPortfolioRows(
+      previous.investments.stockPortfolios,
+      userId,
+    );
+    const nextStockRows = mapStockPortfolioRows(
+      next.investments.stockPortfolios,
+      userId,
+    );
+    await safeUpsertRows(
+      TABLES.stockPortfolios,
+      filterChanged(TABLES.stockPortfolios, nextStockRows.portfolios),
+    );
+    const deletedPortfolios = diffIds(
+      previous.investments.stockPortfolios,
+      next.investments.stockPortfolios,
+    );
     await safeDeleteRows(TABLES.stockPortfolios, deletedPortfolios);
     evictCacheIds(TABLES.stockPortfolios, deletedPortfolios);
 
-    await safeUpsertRows(TABLES.stockHoldings, filterChanged(TABLES.stockHoldings, nextStockRows.holdings));
-    const deletedHoldings = diffIds(prevStockRows.holdings, nextStockRows.holdings);
+    await safeUpsertRows(
+      TABLES.stockHoldings,
+      filterChanged(TABLES.stockHoldings, nextStockRows.holdings),
+    );
+    const deletedHoldings = diffIds(
+      prevStockRows.holdings,
+      nextStockRows.holdings,
+    );
     await safeDeleteRows(TABLES.stockHoldings, deletedHoldings);
     evictCacheIds(TABLES.stockHoldings, deletedHoldings);
 
     const nextFDs = mapFixedDepositRows(next.investments.fd, userId);
-    await safeUpsertRows(TABLES.fixedDeposits, filterChanged(TABLES.fixedDeposits, nextFDs));
+    await safeUpsertRows(
+      TABLES.fixedDeposits,
+      filterChanged(TABLES.fixedDeposits, nextFDs),
+    );
     const deletedFDs = diffIds(previous.investments.fd, next.investments.fd);
     await safeDeleteRows(TABLES.fixedDeposits, deletedFDs);
     evictCacheIds(TABLES.fixedDeposits, deletedFDs);
 
     const nextRDs = mapRecurringDepositRows(next.investments.rd, userId);
-    await safeUpsertRows(TABLES.recurringDeposits, filterChanged(TABLES.recurringDeposits, nextRDs));
+    await safeUpsertRows(
+      TABLES.recurringDeposits,
+      filterChanged(TABLES.recurringDeposits, nextRDs),
+    );
     const deletedRDs = diffIds(previous.investments.rd, next.investments.rd);
     await safeDeleteRows(TABLES.recurringDeposits, deletedRDs);
     evictCacheIds(TABLES.recurringDeposits, deletedRDs);
@@ -932,7 +1103,10 @@ export async function persistPortfolioChanges(
 
   if (touched.has("recurringRules")) {
     const nextRows = mapRecurringRuleRows(next.recurringRules, userId);
-    await safeUpsertRows(TABLES.recurringRules, filterChanged(TABLES.recurringRules, nextRows));
+    await safeUpsertRows(
+      TABLES.recurringRules,
+      filterChanged(TABLES.recurringRules, nextRows),
+    );
     const deletedIds = diffIds(previous.recurringRules, next.recurringRules);
     await safeDeleteRows(TABLES.recurringRules, deletedIds);
     evictCacheIds(TABLES.recurringRules, deletedIds);
@@ -989,8 +1163,11 @@ export async function clearRemotePortfolioData() {
     // Step 4 — bank_accounts
     await del(TABLES.bankAccounts);
 
-    // Step 5 — settings singleton
-    const { error } = await supabase.from(TABLES.settings).delete().eq("id", "singleton");
+    // Step 5 — settings (keyed on user_id after migration)
+    const { error } = await supabase
+      .from(TABLES.settings)
+      .delete()
+      .not("user_id", "is", null);
     if (error) throw new Error(`clear settings: ${error.message}`);
   } catch (error) {
     throw new Error(
@@ -1008,7 +1185,15 @@ export function clearLocalAppCaches() {
 }
 
 export function getLocalStorageUsage() {
-  const relevantKeys = [OFFLINE_BUFFER_KEY, MIGRATION_FLAG_KEY, "stock_name_mappings", LEGACY_STORAGE_KEY];
-  const totalBytes = relevantKeys.reduce((sum, key) => sum + new Blob([localStorage.getItem(key) || ""]).size, 0);
+  const relevantKeys = [
+    OFFLINE_BUFFER_KEY,
+    MIGRATION_FLAG_KEY,
+    "stock_name_mappings",
+    LEGACY_STORAGE_KEY,
+  ];
+  const totalBytes = relevantKeys.reduce(
+    (sum, key) => sum + new Blob([localStorage.getItem(key) || ""]).size,
+    0,
+  );
   return `${(totalBytes / 1024).toFixed(2)} KB`;
 }

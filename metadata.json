@@ -1,5 +1,5 @@
 {
-  "name": "My Portfolio",
-  "description": "A complete personal finance portfolio management web app with local storage persistence and Indian Rupee formatting.",
+  "name": "Finance-Tracker",
+  "description": "A personal finance SPA — bank accounts, investments, loans, expenses, and recurring rules, backed by Supabase.",
   "requestFramePermissions": []
 }

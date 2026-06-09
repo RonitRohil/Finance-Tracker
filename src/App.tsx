@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGuard, useAuthSession } from "./components/AuthGuard";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import Layout from "./components/Layout";
 import { useAppData } from "./hooks/useAppData";
 import Dashboard from "./pages/Dashboard";
@@ -15,13 +16,34 @@ import LoansTracker from "./pages/LoansTracker";
 import Settings from "./pages/Settings";
 import StockMappings from "./pages/StockMappings";
 import { useAutoScheduler } from "./hooks/useAutoScheduler";
+import { supabaseConfigured } from "./lib/supabase";
 import { PortfolioData } from "./types";
 
 function AppShell() {
   const { signOut } = useAuthSession();
-  const { data, loading, syncing, lastSync, updateData, clearAllData, loadAll } = useAppData();
+  const {
+    data,
+    loading,
+    syncing,
+    lastSync,
+    updateData,
+    clearAllData,
+    loadAll,
+  } = useAppData();
   const [activeTab, setActiveTab] = useState("dashboard");
-  const validTabs = useMemo(() => new Set(["dashboard", "bank", "investments", "transactions", "loans", "stock-mappings", "settings"]), []);
+  const validTabs = useMemo(
+    () =>
+      new Set([
+        "dashboard",
+        "bank",
+        "investments",
+        "transactions",
+        "loans",
+        "stock-mappings",
+        "settings",
+      ]),
+    [],
+  );
 
   const getTabFromLocation = useCallback(() => {
     const hash = window.location.hash.replace(/^#\/?/, "");
@@ -38,7 +60,11 @@ function AppShell() {
 
     if (new URLSearchParams(window.location.search).get("p")) {
       const nextHash = `#/${initialTab}`;
-      window.history.replaceState({}, "", `${window.location.pathname}${nextHash}`);
+      window.history.replaceState(
+        {},
+        "",
+        `${window.location.pathname}${nextHash}`,
+      );
     }
 
     const onHashChange = () => setActiveTab(getTabFromLocation());
@@ -49,13 +75,20 @@ function AppShell() {
   useEffect(() => {
     const nextHash = `#/${activeTab}`;
     if (window.location.hash !== nextHash) {
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+      window.history.replaceState(
+        {},
+        "",
+        `${window.location.pathname}${window.location.search}${nextHash}`,
+      );
     }
   }, [activeTab]);
 
-  const patchData = useCallback((partial: Partial<PortfolioData>) => {
-    updateData(partial);
-  }, [updateData]);
+  const patchData = useCallback(
+    (partial: Partial<PortfolioData>) => {
+      updateData(partial);
+    },
+    [updateData],
+  );
 
   useAutoScheduler(data, patchData);
 
@@ -96,16 +129,51 @@ function AppShell() {
   }
 
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab} data={data} updateData={patchData} lastSync={lastSync} syncing={syncing} onSignOut={signOut} onRefresh={loadAll}>
+    <Layout
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      data={data}
+      updateData={patchData}
+      lastSync={lastSync}
+      syncing={syncing}
+      onSignOut={signOut}
+      onRefresh={loadAll}
+    >
       {renderContent()}
     </Layout>
   );
 }
 
 export default function App() {
+  if (!supabaseConfigured) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[color:var(--bg)] p-8 text-center">
+        <div className="font-display text-[18px] font-semibold text-[color:var(--ink)]">
+          App not configured
+        </div>
+        <p className="max-w-sm text-[13px] text-[color:var(--ink-3)]">
+          Add{" "}
+          <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono-num text-[12px]">
+            VITE_SUPABASE_URL
+          </code>{" "}
+          and{" "}
+          <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono-num text-[12px]">
+            VITE_SUPABASE_ANON_KEY
+          </code>{" "}
+          to{" "}
+          <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono-num text-[12px]">
+            .env.local
+          </code>{" "}
+          then restart the dev server.
+        </p>
+      </div>
+    );
+  }
   return (
-    <AuthGuard>
-      <AppShell />
-    </AuthGuard>
+    <ErrorBoundary>
+      <AuthGuard>
+        <AppShell />
+      </AuthGuard>
+    </ErrorBoundary>
   );
 }
