@@ -120,6 +120,10 @@ export default function BankAccounts({
     kind: "income" | "expense" | "transfer";
     accountId: string;
   } | null>(null);
+  const [adjustingAccount, setAdjustingAccount] = useState<BankAccount | null>(
+    null,
+  );
+  const [adjustNewBalance, setAdjustNewBalance] = useState("");
   const accounts = useMemo(() => getAllAccounts(data), [data]);
   const current = new Date();
   const total = accounts.reduce((sum, account) => sum + account.balance, 0);
@@ -129,22 +133,50 @@ export default function BankAccounts({
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const newBalance = Number(formData.get("balance"));
-    // Cash account: allow direct balance update
+    // Cash account: record balance change as income/expense so it's tracked
     if (editingAccount?.isCash) {
-      const account: BankAccount = {
-        id: editingAccount.id,
-        bankName: editingAccount.bankName,
-        accountType: editingAccount.accountType,
-        accountNumber: editingAccount.accountNumber,
-        balance: newBalance,
-        notes: editingAccount.notes,
-        isCash: true,
-      };
-      updateData({
-        bankAccounts: accounts.map((item) =>
-          item.id === editingAccount.id ? account : item,
-        ),
-      });
+      const diff = newBalance - editingAccount.balance;
+      if (diff !== 0) {
+        const baseData: PortfolioData = {
+          ...data,
+          bankAccounts: accounts.map((item) =>
+            item.id === editingAccount.id ? { ...editingAccount } : item,
+          ),
+        };
+        const today = new Date().toISOString().slice(0, 10);
+        if (diff > 0) {
+          updateData(
+            saveIncomeEntry(baseData, {
+              id: crypto.randomUUID(),
+              date: today,
+              amount: diff,
+              source: "Other" as IncomeSource,
+              toAccountId: editingAccount.id,
+              toAccountName: editingAccount.bankName,
+              description: "Balance adjustment",
+            } as any) as Partial<PortfolioData>,
+          );
+        } else {
+          updateData(
+            saveExpenseEntry(baseData, {
+              id: crypto.randomUUID(),
+              date: today,
+              amount: Math.abs(diff),
+              category: "Other" as ExpenseCategory,
+              fromAccountId: editingAccount.id,
+              fromAccountName: editingAccount.bankName,
+              paymentMethod: "Cash" as PaymentMethod,
+              description: "Balance adjustment",
+            } as any) as Partial<PortfolioData>,
+          );
+        }
+      } else {
+        updateData({
+          bankAccounts: accounts.map((item) =>
+            item.id === editingAccount.id ? { ...editingAccount } : item,
+          ),
+        });
+      }
       setIsModalOpen(false);
       setEditingAccount(null);
       return;
@@ -460,6 +492,20 @@ export default function BankAccounts({
               ))}
             </div>
 
+            <button
+              type="button"
+              className="mb-4 flex w-full items-center justify-center gap-2 rounded-[14px] bg-[color:var(--bg-3)] py-2.5 text-[12px] font-semibold text-[color:var(--ink-2)] hairline transition hover:bg-white/[0.04] active:scale-[0.98]"
+              style={{ color: "var(--warn)" }}
+              onClick={() => {
+                setAdjustingAccount(openAccount);
+                setAdjustNewBalance(String(openAccount.balance));
+                setOpenId(null);
+              }}
+            >
+              <Icon name="pencil" size={13} />
+              Adjust Balance
+            </button>
+
             <div className="grid grid-cols-3 gap-2">
               <Card className="bg-[color:var(--bg-3)]" padded>
                 <div className="text-[10px] uppercase tracking-wider text-[color:var(--ink-4)]">
@@ -508,41 +554,74 @@ export default function BankAccounts({
               if (Math.abs(drift) <= 1) return null;
               return (
                 <div
-                  className="mt-3 flex items-center justify-between rounded-[14px] bg-[color:var(--bg-3)] px-4 py-3 hairline"
+                  className="mt-3 rounded-[14px] bg-[color:var(--bg-3)] px-4 py-3 hairline"
                   style={{
                     borderColor:
                       "color-mix(in oklch, var(--warn) 40%, transparent)",
                   }}
                 >
-                  <div>
-                    <div
-                      className="text-[11px] font-semibold"
-                      style={{ color: "var(--warn)" }}
-                    >
-                      Balance drift detected
+                  <div
+                    className="text-[11px] font-semibold"
+                    style={{ color: "var(--warn)" }}
+                  >
+                    Balance drift detected
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[color:var(--ink-4)]">
+                    Stored {compactINR(openAccount.balance)} · Computed{" "}
+                    {compactINR(computedBal)} ({drift > 0 ? "+" : ""}
+                    {compactINR(drift)})
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        block
+                        onClick={() => {
+                          updateData({
+                            bankAccounts: accounts.map((a) =>
+                              a.id === openAccount.id
+                                ? { ...a, balance: computedBal }
+                                : a,
+                            ),
+                          });
+                          setOpenId(null);
+                        }}
+                      >
+                        Accept Computed
+                      </Button>
+                      <div className="mt-1 text-center text-[10px] text-[color:var(--ink-4)]">
+                        Trust tx history
+                      </div>
                     </div>
-                    <div className="mt-0.5 text-[11px] text-[color:var(--ink-4)]">
-                      Stored {compactINR(openAccount.balance)} · Computed{" "}
-                      {compactINR(computedBal)} ({drift > 0 ? "+" : ""}
-                      {compactINR(drift)})
+                    <div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        block
+                        onClick={() => {
+                          const currentOpening =
+                            openAccount.openingBalance ?? openAccount.balance;
+                          const newOpening =
+                            openAccount.balance -
+                            (computedBal - currentOpening);
+                          updateData({
+                            bankAccounts: accounts.map((a) =>
+                              a.id === openAccount.id
+                                ? { ...a, openingBalance: newOpening }
+                                : a,
+                            ),
+                          });
+                          setOpenId(null);
+                        }}
+                      >
+                        Fix Opening
+                      </Button>
+                      <div className="mt-1 text-center text-[10px] text-[color:var(--ink-4)]">
+                        Trust stored balance
+                      </div>
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      updateData({
-                        bankAccounts: accounts.map((a) =>
-                          a.id === openAccount.id
-                            ? { ...a, balance: computedBal }
-                            : a,
-                        ),
-                      });
-                      setOpenId(null);
-                    }}
-                  >
-                    Recompute
-                  </Button>
                 </div>
               );
             })()}
@@ -672,6 +751,109 @@ export default function BankAccounts({
         updateData={updateData}
         onClose={() => setQuickAction(null)}
       />
+
+      <Modal
+        isOpen={!!adjustingAccount}
+        onClose={() => {
+          setAdjustingAccount(null);
+          setAdjustNewBalance("");
+        }}
+        title="Adjust Balance"
+        mobileSheet
+      >
+        {adjustingAccount &&
+          (() => {
+            const newBal = Number(adjustNewBalance) || 0;
+            const diff = newBal - adjustingAccount.balance;
+            return (
+              <div className="space-y-4">
+                <Card className="bg-[color:var(--bg-3)]">
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--ink-4)]">
+                    Current balance
+                  </div>
+                  <div className="mt-1 font-display text-[20px] font-semibold">
+                    {formatCurrency(adjustingAccount.balance)}
+                  </div>
+                </Card>
+                <Input
+                  label="New balance"
+                  type="number"
+                  value={adjustNewBalance}
+                  onChange={(e) => setAdjustNewBalance(e.target.value)}
+                  placeholder={String(adjustingAccount.balance)}
+                />
+                {diff !== 0 && (
+                  <div
+                    className="rounded-[14px] px-4 py-3 text-[12px] hairline"
+                    style={{
+                      background: `color-mix(in oklch, ${diff > 0 ? "var(--pos)" : "var(--neg)"} 10%, transparent)`,
+                      borderColor: `color-mix(in oklch, ${diff > 0 ? "var(--pos)" : "var(--neg)"} 30%, transparent)`,
+                      color: diff > 0 ? "var(--pos)" : "var(--neg)",
+                    }}
+                  >
+                    {diff > 0 ? "+" : ""}
+                    {formatCurrency(diff)} will be recorded as a{" "}
+                    <strong>{diff > 0 ? "income" : "expense"}</strong> entry
+                    titled "Balance adjustment"
+                  </div>
+                )}
+                <div className="flex gap-3 pt-2">
+                  <Button
+                    block
+                    disabled={diff === 0 || !adjustNewBalance}
+                    onClick={() => {
+                      if (!adjustingAccount || diff === 0) return;
+                      const baseData: PortfolioData = { ...data };
+                      const today = new Date().toISOString().slice(0, 10);
+                      if (diff > 0) {
+                        updateData(
+                          saveIncomeEntry(baseData, {
+                            id: crypto.randomUUID(),
+                            date: today,
+                            amount: diff,
+                            source: "Other" as IncomeSource,
+                            toAccountId: adjustingAccount.id,
+                            toAccountName: adjustingAccount.bankName,
+                            description: "Balance adjustment",
+                          } as any) as Partial<PortfolioData>,
+                        );
+                      } else {
+                        updateData(
+                          saveExpenseEntry(baseData, {
+                            id: crypto.randomUUID(),
+                            date: today,
+                            amount: Math.abs(diff),
+                            category: "Other" as ExpenseCategory,
+                            fromAccountId: adjustingAccount.id,
+                            fromAccountName: adjustingAccount.bankName,
+                            paymentMethod: adjustingAccount.isCash
+                              ? ("Cash" as PaymentMethod)
+                              : ("Net Banking" as PaymentMethod),
+                            description: "Balance adjustment",
+                          } as any) as Partial<PortfolioData>,
+                        );
+                      }
+                      setAdjustingAccount(null);
+                      setAdjustNewBalance("");
+                    }}
+                  >
+                    Confirm Adjustment
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setAdjustingAccount(null);
+                      setAdjustNewBalance("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+      </Modal>
     </div>
   );
 }
