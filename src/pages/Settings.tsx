@@ -23,11 +23,15 @@ import {
 } from "../components/UI";
 import {
   applyRecurringRuleEdit,
+  combineBalanceDeltas,
   computeAccountBalance,
   getAllAccounts,
   getCategoryDisplayPath,
+  getExpenseBalanceDelta,
   getExpenseCategories,
   getExpenseMethods,
+  getIncomeBalanceDelta,
+  getTransferBalanceDelta,
   mergeImportedCategories,
 } from "../lib/utils";
 import Icon from "../components/Icon";
@@ -536,7 +540,24 @@ export default function Settings({
 
   const commitImport = () => {
     if (!importPendingData) return;
+
+    // Compute the net balance delta per account from all imported transactions.
+    // Then adjust each account's openingBalance so that computeAccountBalance()
+    // still equals the stored balance after import — preventing drift/negatives.
+    const importDeltas = combineBalanceDeltas(
+      ...importPendingData.income.map(getIncomeBalanceDelta),
+      ...importPendingData.expenses.map(getExpenseBalanceDelta),
+      ...importPendingData.transfers.map(getTransferBalanceDelta),
+    );
+    const updatedAccounts = data.bankAccounts.map((account) => {
+      const delta = importDeltas[account.id] ?? 0;
+      if (delta === 0) return account;
+      const currentOpening = account.openingBalance ?? account.balance;
+      return { ...account, openingBalance: currentOpening - delta };
+    });
+
     updateData({
+      bankAccounts: updatedAccounts,
       income: mergeImportedEntries(data.income, importPendingData.income),
       expenses: mergeImportedEntries(data.expenses, importPendingData.expenses),
       transfers: mergeImportedEntries(
